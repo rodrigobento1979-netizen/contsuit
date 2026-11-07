@@ -1,0 +1,277 @@
+{
+  "entities": {
+    "Admin": {
+      "title": "Admin",
+      "description": "Lista de administradores mestres do sistema",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "E-mail do administrador master"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Timestamp de concessão"
+        }
+      },
+      "required": ["email"]
+    },
+    "User": {
+      "title": "User",
+      "description": "Perfil de usuário corporativo ou contador",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Nome do usuário",
+          "maxLength": 100
+        },
+        "email": {
+          "type": "string",
+          "description": "E-mail de login e convite",
+          "maxLength": 150
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "accountant", "client"],
+          "description": "Papel do usuário no sistema"
+        },
+        "companyId": {
+          "type": "string",
+          "description": "ID da empresa associada para isolamento multi-tenant",
+          "maxLength": 100
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "pending"],
+          "description": "Status do convite de acesso"
+        },
+        "invitationToken": {
+          "type": "string",
+          "description": "Token gerado para o link de cadastramento",
+          "maxLength": 100
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": ["name", "email", "role", "companyId", "status"]
+    },
+    "Company": {
+      "title": "Company",
+      "description": "Empresa cliente ou escritório contábil",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Razão social",
+          "maxLength": 150
+        },
+        "fantasyName": {
+          "type": "string",
+          "description": "Nome fantasia",
+          "maxLength": 100
+        },
+        "cnpj": {
+          "type": "string",
+          "description": "CNPJ da empresa",
+          "maxLength": 20
+        },
+        "contactEmail": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 30
+        },
+        "accountingSystem": {
+          "type": "string",
+          "enum": ["dominio", "questor", "fortes", "alterdata", "totvs", "sci", "outro"]
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": ["name", "cnpj", "accountingSystem"]
+    },
+    "Asset": {
+      "title": "Asset",
+      "description": "Bem patrimonial sob controle de depreciação contábil (Ativo Permanente/Imobilizado)",
+      "type": "object",
+      "properties": {
+        "companyId": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "tagNumber": {
+          "type": "string",
+          "description": "Plaqueta / Tag de patrimônio",
+          "maxLength": 50
+        },
+        "description": {
+          "type": "string",
+          "description": "Descrição do bem",
+          "maxLength": 255
+        },
+        "category": {
+          "type": "string",
+          "enum": ["edificacoes", "maquinas", "veiculos", "moveis", "ti", "software", "ferramentas", "instalacoes", "outro"]
+        },
+        "categoryLabel": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "acquisitionDate": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "depreciationStartDate": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "acquisitionValue": {
+          "type": "number",
+          "description": "Custo de aquisição em R$"
+        },
+        "residualValue": {
+          "type": "number",
+          "description": "Valor residual em R$"
+        },
+        "annualRate": {
+          "type": "number",
+          "description": "Taxa anual de depreciação percentual"
+        },
+        "usefulLifeMonths": {
+          "type": "integer",
+          "description": "Vida útil em meses"
+        },
+        "costCenter": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "location": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "supplier": {
+          "type": "string",
+          "maxLength": 150
+        },
+        "invoiceNumber": {
+          "type": "string",
+          "maxLength": 50
+        },
+        "debitAccount": {
+          "type": "string",
+          "maxLength": 50
+        },
+        "creditAccount": {
+          "type": "string",
+          "maxLength": 50
+        },
+        "assetAccount": {
+          "type": "string",
+          "maxLength": 50
+        },
+        "status": {
+          "type": "string",
+          "enum": ["ativo", "baixado", "totalmente_depreciado", "em_manutencao"]
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": ["companyId", "tagNumber", "description", "category", "acquisitionDate", "acquisitionValue", "annualRate", "usefulLifeMonths", "status"]
+    },
+    "ConvertedStatement": {
+      "title": "ConvertedStatement",
+      "description": "Extrato bancário convertido em arquivo OFX",
+      "type": "object",
+      "properties": {
+        "companyId": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "originalFileName": {
+          "type": "string",
+          "maxLength": 150
+        },
+        "bankName": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "bankCode": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "agency": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "accountNumber": {
+          "type": "string",
+          "maxLength": 30
+        },
+        "accountType": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "startDate": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "endDate": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "totalDebits": {
+          "type": "number"
+        },
+        "totalCredits": {
+          "type": "number"
+        },
+        "transactionsCount": {
+          "type": "integer"
+        },
+        "ofxContent": {
+          "type": "string",
+          "description": "Conteúdo gerado no padrão OFX 1.02"
+        },
+        "uploadedAt": {
+          "type": "string"
+        }
+      },
+      "required": ["companyId", "bankName", "startDate", "endDate", "transactionsCount", "ofxContent"]
+    }
+  },
+  "firestore": {
+    "/admins/{adminId}": {
+      "schema": "Admin",
+      "description": "Coleção de permissões de administradores mestres"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Usuários e seus respectivos papéis de acesso"
+    },
+    "/companies/{companyId}": {
+      "schema": "Company",
+      "description": "Empresas cadastradas no sistema"
+    },
+    "/companies/{companyId}/assets/{assetId}": {
+      "schema": "Asset",
+      "description": "Bens do imobilizado pertencentes à empresa"
+    },
+    "/companies/{companyId}/statements/{statementId}": {
+      "schema": "ConvertedStatement",
+      "description": "Histórico de extratos OFX convertidos da empresa"
+    }
+  }
+}

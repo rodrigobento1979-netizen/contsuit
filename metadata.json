@@ -1,0 +1,6 @@
+{
+  "name": "ContSuite",
+  "description": "Sistema integrado de controle de ativo permanente, apuração e exportação de depreciação contábil e conversor inteligente de extratos bancários (PDF e imagem) para formato OFX com IA.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

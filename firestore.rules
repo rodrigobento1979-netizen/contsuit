@@ -1,0 +1,72 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: default-deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'rodrigobento1979@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isCompanyUser(companyId) {
+      return isSignedIn() && (
+        isAdmin() ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.companyId == companyId)
+      );
+    }
+
+    // Admins collection
+    match /admins/{adminId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Users collection
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow create: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // Companies collection
+    match /companies/{companyId} {
+      allow read: if isSignedIn() && (isCompanyUser(companyId) || isAdmin());
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && (isCompanyUser(companyId) || isAdmin());
+      allow delete: if isAdmin();
+
+      // Assets sub-collection (Ativo Permanente)
+      match /assets/{assetId} {
+        allow read: if isSignedIn() && (isCompanyUser(companyId) || isAdmin());
+        allow create: if isSignedIn() && (isCompanyUser(companyId) || isAdmin()) && isValidId(assetId);
+        allow update: if isSignedIn() && (isCompanyUser(companyId) || isAdmin()) && isValidId(assetId);
+        allow delete: if isSignedIn() && (isCompanyUser(companyId) || isAdmin()) && isValidId(assetId);
+      }
+
+      // Statements sub-collection (Extratos OFX)
+      match /statements/{statementId} {
+        allow read: if isSignedIn() && (isCompanyUser(companyId) || isAdmin());
+        allow create: if isSignedIn() && (isCompanyUser(companyId) || isAdmin()) && isValidId(statementId);
+        allow update: if isSignedIn() && (isCompanyUser(companyId) || isAdmin()) && isValidId(statementId);
+        allow delete: if isSignedIn() && (isCompanyUser(companyId) || isAdmin()) && isValidId(statementId);
+      }
+    }
+  }
+}

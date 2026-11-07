@@ -1,0 +1,204 @@
+{
+  "users": [
+    {
+      "id": "usr-admin-1",
+      "name": "Rodrigo Bento",
+      "email": "rodrigobento1979@gmail.com",
+      "role": "admin",
+      "companyId": "comp-master",
+      "createdAt": "2026-01-01T08:00:00.000Z",
+      "status": "active"
+    }
+  ],
+  "companies": [
+    {
+      "id": "comp-master",
+      "name": "Bento & Associados Consultoria Contábil",
+      "cnpj": "12.345.678/0001-90",
+      "fantasyName": "Bento Contabilidade",
+      "contactEmail": "rodrigobento1979@gmail.com",
+      "phone": "(11) 98765-4321",
+      "accountingSystem": "dominio",
+      "chartOfAccounts": {
+        "assetDefaultAccount": "1.2.3.01.0001",
+        "depreciationExpenseAccount": "3.1.2.04.0010",
+        "accumulatedDepreciationAccount": "1.2.3.09.0001"
+      },
+      "createdAt": "2026-01-01T08:00:00.000Z"
+    }
+  ],
+  "assets": [],
+  "statements": [],
+  "fees": [],
+  "payments": [],
+  "accounts": [
+    {
+      "id": "acc-1",
+      "companyId": "comp-master",
+      "code": "1.1.1.02.0001",
+      "name": "Banco Itaú Unibanco S/A c/c",
+      "type": "analitica",
+      "nature": "devedora",
+      "group": "ativo",
+      "categoryTag": "banco",
+      "level": 5,
+      "createdAt": "2026-01-01T08:00:00.000Z"
+    },
+    {
+      "id": "acc-2",
+      "companyId": "comp-master",
+      "code": "1.1.1.02.0002",
+      "name": "Banco Bradesco S/A c/c",
+      "type": "analitica",
+      "nature": "devedora",
+      "group": "ativo",
+      "categoryTag": "banco",
+      "level": 5,
+      "createdAt": "2026-01-01T08:00:00.000Z"
+    },
+    {
+      "id": "acc-3",
+      "companyId": "comp-master",
+      "code": "1.2.3.01.0001",
+      "name": "Edificações e Construções",
+      "type": "analitica",
+      "nature": "devedora",
+      "group": "ativo",
+      "categoryTag": "imobilizado",
+      "level": 5,
+      "createdAt": "2026-01-01T08:00:00.000Z"
+    },
+    {
+      "id": "acc-4",
+      "companyId": "comp-master",
+      "code": "1.2.3.01.0002",
+      "name": "Máquinas e Equipamentos Industriais",
+      "type": "analitica",
+      "nature": "devedora",
+      "group": "ativo",
+      "categoryTag": "imobilizado",
+      "level": 5,
+      "createdAt": "2026-01-01T08:00:00.000Z"
+    },
+    {
+      "id": "acc-5",
+      "companyId": "comp-master",
+      "code": "1.2.3.01.0003",
+      "name": "Móveis e Utensílios de Escritório",
+      "type": "analitica",
+      "nature": "devedora",
+      "group": "ativo",
+      "categoryTag": "imobilizado",
+      "level": 5,
+      "createdAt": "2026-01-01T08:00:00.000Z"
+    },
+    {
+      "id": "acc-6",
+      "companyId": "comp-master",
+      "code": "1.2.3.01.0004",
+      "name": "Veículos e Automóveis",
+      "type": "analitica",
+      "nature": "devedora",
+      "group": "ativo",
+      "categoryTag": "imobilizado",
+      "level": 5,
+      "createdAt": "2026-01-01T08:00:00.000Z"
+    },
+    {
+      "id": "acc-7",
+      "companyId": "comp-master",
+      "code": "1.2.3.01.0005",
+      "name": "Equipamentos de Informática (TI)",
+      "type": "analitica",
+      "nature": "devedora",
+      "group": "ativo",
+      "categoryTag": "imobilizado",
+      "level": 5,
+      "createdAt": "2026-01-01T08:00:00.000Z"
+    },
+    {
+      "id": "acc-8",
+      "companyId": "comp-master",
+      "code": "1.2.3.09.0001",
+      "name": "(-) Depreciação Acumulada - Edificações",
+      "type": "analitica",
+      "nature": "credora",
+      "group": "ativo",
+      "categoryTag": "depreciacao_acumulada",
+      "level": 5,
+      "createdAt": "2026-01-01T08:00:00.000Z"
+    },
+    {
+      "id": "acc-9",
+      "companyId": "comp-master",
+      "code": "1.2.3.09.0002",
+      "name": "(-) Depreciação Acumulada - Máquinas",
+      "type": "analitica",
+      "nature": "credora",
+      "group": "ativo",
+      "categoryTag": "depreciacao_acumulada",
+      "level": 5,
+      "createdAt": "2026-01-01T08:00:00.000Z"
+    },
+    {
+      "id": "acc-10",
+      "companyId": "comp-master",
+      "code": "1.2.3.09.0003",
+      "name": "(-) Depreciação Acumulada - Móveis",
+      "type": "analitica",
+      "nature": "credora",
+      "group": "ativo",
+      "categoryTag": "depreciacao_acumulada",
+      "level": 5,
+      "createdAt": "2026-01-01T08:00:00.000Z"
+    },
+    {
+      "id": "acc-11",
+      "companyId": "comp-master",
+      "code": "1.2.3.09.0004",
+      "name": "(-) Depreciação Acumulada - Veículos",
+      "type": "analitica",
+      "nature": "credora",
+      "group": "ativo",
+      "categoryTag": "depreciacao_acumulada",
+      "level": 5,
+      "createdAt": "2026-01-01T08:00:00.000Z"
+    },
+    {
+      "id": "acc-12",
+      "companyId": "comp-master",
+      "code": "1.2.3.09.0005",
+      "name": "(-) Depreciação Acumulada - TI",
+      "type": "analitica",
+      "nature": "credora",
+      "group": "ativo",
+      "categoryTag": "depreciacao_acumulada",
+      "level": 5,
+      "createdAt": "2026-01-01T08:00:00.000Z"
+    },
+    {
+      "id": "acc-13",
+      "companyId": "comp-master",
+      "code": "3.1.2.04.0010",
+      "name": "Despesas com Depreciação e Amortização",
+      "type": "analitica",
+      "nature": "devedora",
+      "group": "despesa",
+      "categoryTag": "despesa_depreciacao",
+      "level": 4,
+      "createdAt": "2026-01-01T08:00:00.000Z"
+    },
+    {
+      "id": "acc-14",
+      "companyId": "comp-master",
+      "code": "3.1.3.01.0001",
+      "name": "Despesas Financeiras e Tarifas Bancárias",
+      "type": "analitica",
+      "nature": "devedora",
+      "group": "despesa",
+      "categoryTag": "outro",
+      "level": 4,
+      "createdAt": "2026-01-01T08:00:00.000Z"
+    }
+  ]
+}
