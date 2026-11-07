@@ -11,11 +11,13 @@
   },
   "dependencies": {
     "@google/genai": "latest",
+    "express": "^4.21.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.15.0",
+    "@types/express": "^5.0.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
