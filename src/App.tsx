@@ -101,6 +101,23 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 3500);
   };
 
+  // Safe JSON response parser that prevents crashes when servers return HTML 404 or text errors
+  const safeJson = async <T,>(res: Response): Promise<T | null> => {
+    try {
+      if (!res.ok) return null;
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        const text = await res.text();
+        console.warn('API returned non-JSON response:', text.slice(0, 80));
+        return null;
+      }
+      return (await res.json()) as T;
+    } catch (e) {
+      console.warn('Failed parsing JSON from response:', e);
+      return null;
+    }
+  };
+
   // 1. Fetch Companies and Users (Scoped to user role and tenant)
   const fetchCompaniesAndUsers = useCallback(async () => {
     try {
@@ -113,8 +130,8 @@ export default function App() {
         fetch('/api/users'),
       ]);
 
-      if (compRes.ok) {
-        const comps: Company[] = await compRes.json();
+      const comps = await safeJson<Company[]>(compRes);
+      if (comps && Array.isArray(comps)) {
         setAllCompanies(comps);
         const found = comps.find(c => c.id === currentCompany.id);
         if (found) {
@@ -124,8 +141,8 @@ export default function App() {
         }
       }
 
-      if (usersRes.ok) {
-        const usrs = await usersRes.json();
+      const usrs = await safeJson<User[]>(usersRes);
+      if (usrs && Array.isArray(usrs)) {
         setAllUsers(usrs);
       }
     } catch (err) {
@@ -138,8 +155,8 @@ export default function App() {
     if (!currentCompany.id) return;
     try {
       const res = await fetch(`/api/assets?companyId=${currentCompany.id}`);
-      if (res.ok) {
-        const data = await res.json();
+      const data = await safeJson<Asset[]>(res);
+      if (data && Array.isArray(data)) {
         setAssets(data);
       }
     } catch (err) {
@@ -152,8 +169,8 @@ export default function App() {
     if (!currentCompany.id) return;
     try {
       const res = await fetch(`/api/assets/depreciation?companyId=${currentCompany.id}&month=${selectedMonth}`);
-      if (res.ok) {
-        const data = await res.json();
+      const data = await safeJson<DepreciationSummary>(res);
+      if (data) {
         setDepreciationSummary(data);
       }
     } catch (err) {
@@ -166,8 +183,8 @@ export default function App() {
     if (!currentCompany.id) return;
     try {
       const res = await fetch(`/api/ofx/history?companyId=${currentCompany.id}`);
-      if (res.ok) {
-        const data = await res.json();
+      const data = await safeJson<ConvertedStatement[]>(res);
+      if (data && Array.isArray(data)) {
         setStatements(data);
       }
     } catch (err) {
