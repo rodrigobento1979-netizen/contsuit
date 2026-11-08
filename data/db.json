@@ -8,6 +8,18 @@
       "companyId": "comp-master",
       "createdAt": "2026-01-01T08:00:00.000Z",
       "status": "active"
+    },
+    {
+      "name": "Cliente Teste",
+      "email": "cliente.teste@exemplo.com",
+      "role": "client",
+      "companyId": "comp-mw7qichl",
+      "status": "pending",
+      "invitationToken": "inv-9r416ft1-mw7qichl",
+      "invitedAt": "2026-11-08T11:13:54.105Z",
+      "defaultPassword": "ContSuite@2026",
+      "id": "usr-mw7qichl",
+      "createdAt": "2026-11-08T11:13:54.105Z"
     }
   ],
   "companies": [
@@ -25,6 +37,23 @@
         "accumulatedDepreciationAccount": "1.2.3.09.0001"
       },
       "createdAt": "2026-01-01T08:00:00.000Z"
+    },
+    {
+      "name": "Empresa Teste Ltda",
+      "cnpj": "11.222.333/0001-44",
+      "fantasyName": "Empresa Teste Ltda",
+      "contactEmail": "cliente.teste@exemplo.com",
+      "phone": "",
+      "accountingSystem": "dominio",
+      "chartOfAccounts": {
+        "assetDefaultAccount": "1.2.3.01.0001",
+        "depreciationExpenseAccount": "3.1.2.04.0010",
+        "accumulatedDepreciationAccount": "1.2.3.09.0001"
+      },
+      "adminEmail": "rodrigobento1979@gmail.com",
+      "adminName": "Rodrigo Bento",
+      "id": "comp-mw7qichl",
+      "createdAt": "2026-11-08T11:13:54.105Z"
     }
   ],
   "assets": [],

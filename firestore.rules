@@ -39,15 +39,15 @@ service cloud.firestore {
 
     // Users collection
     match /users/{userId} {
-      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-      allow create: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
       allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin());
       allow delete: if isAdmin();
     }
 
     // Companies collection
     match /companies/{companyId} {
-      allow read: if isSignedIn() && (isCompanyUser(companyId) || isAdmin());
+      allow read: if isSignedIn();
       allow create: if isSignedIn();
       allow update: if isSignedIn() && (isCompanyUser(companyId) || isAdmin());
       allow delete: if isAdmin();

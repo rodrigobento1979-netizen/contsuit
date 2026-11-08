@@ -8,6 +8,7 @@ import {
   getUserByEmail,
   createUser,
   updateUser,
+  deleteUser,
   getAssets,
   getAssetById,
   createAsset,
@@ -253,6 +254,97 @@ apiRouter.post('/users/invite', (req: Request, res: Response) => {
       company,
       emailPreview,
       message: `Convite registrado com sucesso para ${newUser.email}. O e-mail de cadastramento foi gerado!`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Update user (e.g. activate pending user, change role or name)
+apiRouter.patch('/users/:id', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
+    const updated = updateUser(id, updates);
+    if (!updated) {
+      return res.status(404).json({ error: 'Usuário não encontrado' });
+    }
+    const companies = getCompanies();
+    return res.json({
+      ...updated,
+      company: companies.find(c => c.id === updated.companyId),
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete user or cancel invitation
+apiRouter.delete('/users/:id', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const deleted = deleteUser(id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Usuário não encontrado' });
+    }
+    return res.json({ success: true, deletedUser: deleted });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Resend / regenerate invitation
+apiRouter.post('/users/:id/resend-invite', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const user = getUserById(id);
+    if (!user) {
+      return res.status(404).json({ error: 'Usuário não encontrado' });
+    }
+    const newToken = 'inv-' + Math.random().toString(36).substring(2, 10) + '-' + Date.now().toString(36);
+    const updated = updateUser(id, {
+      invitationToken: newToken,
+      invitedAt: new Date().toISOString(),
+      status: 'pending',
+    });
+    const company = getCompanyById(user.companyId);
+    const defaultPassword = 'ContSuite@2026';
+
+    const emailPreview = {
+      to: user.email,
+      from: 'sistema@contsuite.com.br (Rodrigo Bento - Administrador)',
+      subject: `Convite de Acesso ao ContSuite Contábil - ${company?.fantasyName || 'Sua Empresa'}`,
+      invitationLink: `https://contsuite.app/login?email=${encodeURIComponent(user.email)}`,
+      defaultPassword,
+      bodyHtml: `
+        <div style="font-family: Arial, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; background: #ffffff;">
+          <div style="background-color: #004d40; padding: 16px; border-radius: 8px; text-align: center; margin-bottom: 20px;">
+            <h2 style="color: #ffffff; margin: 0; font-size: 20px;">ContSuite Contábil</h2>
+            <p style="color: #a7ffeb; margin: 4px 0 0 0; font-size: 12px;">Reenvio de Convite de Acesso</p>
+          </div>
+          <p>Olá, <strong>${user.name}</strong>!</p>
+          <p>O Administrador <strong>Rodrigo Bento</strong> reenviou suas credenciais de acesso corporativo exclusivo para a empresa <strong>${company?.name || 'sua empresa'}</strong>.</p>
+          
+          <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px; margin: 20px 0;">
+            <p style="margin: 0 0 8px 0; font-weight: bold; color: #166534; font-size: 14px;">Suas Credenciais de Acesso Inicial:</p>
+            <p style="margin: 4px 0; font-size: 13px;"><strong>E-mail de Login:</strong> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px;">${user.email}</code></p>
+            <p style="margin: 4px 0; font-size: 13px;"><strong>Senha Padrão Provisória:</strong> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-weight: bold; color: #004d40;">${defaultPassword}</code></p>
+          </div>
+
+          <div style="margin: 28px 0; text-align: center;">
+            <a href="https://contsuite.app/login?email=${encodeURIComponent(user.email)}" style="background-color: #00897b; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; display: inline-block;">
+              Acessar ContSuite com E-mail e Senha
+            </a>
+          </div>
+        </div>
+      `,
+    };
+
+    return res.json({
+      success: true,
+      user: { ...updated, company },
+      emailPreview,
+      message: `Convite reenviado com sucesso para ${user.email}`,
     });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });

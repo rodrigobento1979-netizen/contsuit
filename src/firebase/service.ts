@@ -61,6 +61,9 @@ export function subscribeToAuth(callback: (user: FirebaseUser | null) => void) {
 // -------------------------------------------------------------
 export async function fetchCompaniesFromFirestore(): Promise<Company[]> {
   const path = 'companies';
+  if (!auth.currentUser) {
+    return [];
+  }
   try {
     const snap = await getDocs(collection(db, path));
     const list: Company[] = [];
@@ -75,6 +78,7 @@ export async function fetchCompaniesFromFirestore(): Promise<Company[]> {
 }
 
 export async function saveCompanyToFirestore(company: Company): Promise<void> {
+  if (!auth.currentUser) return;
   const path = `companies/${company.id}`;
   try {
     await setDoc(doc(db, 'companies', company.id), company, { merge: true });
@@ -87,6 +91,7 @@ export async function saveCompanyToFirestore(company: Company): Promise<void> {
 // FIRESTORE: BENS DO ATIVO PERMANENTE (ASSETS)
 // -------------------------------------------------------------
 export async function fetchAssetsFromFirestore(companyId: string): Promise<Asset[]> {
+  if (!auth.currentUser || !companyId) return [];
   const path = `companies/${companyId}/assets`;
   try {
     const snap = await getDocs(collection(db, 'companies', companyId, 'assets'));
@@ -102,6 +107,7 @@ export async function fetchAssetsFromFirestore(companyId: string): Promise<Asset
 }
 
 export async function saveAssetToFirestore(companyId: string, asset: Asset): Promise<void> {
+  if (!auth.currentUser || !companyId) return;
   const path = `companies/${companyId}/assets/${asset.id}`;
   try {
     await setDoc(doc(db, 'companies', companyId, 'assets', asset.id), asset, { merge: true });
@@ -111,6 +117,7 @@ export async function saveAssetToFirestore(companyId: string, asset: Asset): Pro
 }
 
 export async function deleteAssetFromFirestore(companyId: string, assetId: string): Promise<void> {
+  if (!auth.currentUser || !companyId) return;
   const path = `companies/${companyId}/assets/${assetId}`;
   try {
     await deleteDoc(doc(db, 'companies', companyId, 'assets', assetId));
@@ -123,6 +130,7 @@ export async function deleteAssetFromFirestore(companyId: string, assetId: strin
 // FIRESTORE: EXTRATOS CONVERTIDOS (STATEMENTS)
 // -------------------------------------------------------------
 export async function fetchStatementsFromFirestore(companyId: string): Promise<ConvertedStatement[]> {
+  if (!auth.currentUser || !companyId) return [];
   const path = `companies/${companyId}/statements`;
   try {
     const snap = await getDocs(collection(db, 'companies', companyId, 'statements'));
@@ -138,6 +146,7 @@ export async function fetchStatementsFromFirestore(companyId: string): Promise<C
 }
 
 export async function saveStatementToFirestore(companyId: string, statement: ConvertedStatement): Promise<void> {
+  if (!auth.currentUser || !companyId) return;
   const statementId = statement.id || 'stmt-' + Date.now().toString(36);
   const path = `companies/${companyId}/statements/${statementId}`;
   try {
@@ -155,6 +164,9 @@ export async function saveStatementToFirestore(companyId: string, statement: Con
 // -------------------------------------------------------------
 export async function fetchUsersFromFirestore(): Promise<User[]> {
   const path = 'users';
+  if (!auth.currentUser) {
+    return [];
+  }
   try {
     const snap = await getDocs(collection(db, path));
     const list: User[] = [];
@@ -169,6 +181,7 @@ export async function fetchUsersFromFirestore(): Promise<User[]> {
 }
 
 export async function syncUserToFirestore(user: User): Promise<void> {
+  if (!auth.currentUser) return;
   const path = `users/${user.id}`;
   try {
     await setDoc(doc(db, 'users', user.id), user, { merge: true });

@@ -21,10 +21,12 @@ import {
   logoutFirebase, 
   subscribeToAuth,
   saveCompanyToFirestore,
+  fetchCompaniesFromFirestore,
   saveAssetToFirestore,
   deleteAssetFromFirestore,
   saveStatementToFirestore,
-  syncUserToFirestore
+  syncUserToFirestore,
+  fetchUsersFromFirestore
 } from './firebase/service';
 
 export default function App() {
@@ -118,7 +120,7 @@ export default function App() {
     }
   };
 
-  // 1. Fetch Companies and Users (Scoped to user role and tenant)
+  // 1. Fetch Companies and Users (Scoped to user role and tenant, resilient across Vercel & Firestore)
   const fetchCompaniesAndUsers = useCallback(async () => {
     try {
       const companyUrl = currentUser.role === 'client' && currentUser.companyId
@@ -130,20 +132,77 @@ export default function App() {
         fetch('/api/users'),
       ]);
 
-      const comps = await safeJson<Company[]>(compRes);
-      if (comps && Array.isArray(comps)) {
-        setAllCompanies(comps);
-        const found = comps.find(c => c.id === currentCompany.id);
+      const apiComps = (await safeJson<Company[]>(compRes)) || [];
+      const apiUsers = (await safeJson<User[]>(usersRes)) || [];
+
+      // Fetch from Firestore in parallel for bulletproof resilience
+      let firestoreUsers: User[] = [];
+      let firestoreCompanies: Company[] = [];
+      try {
+        const [fUsers, fComps] = await Promise.all([
+          fetchUsersFromFirestore(),
+          fetchCompaniesFromFirestore(),
+        ]);
+        firestoreUsers = fUsers || [];
+        firestoreCompanies = fComps || [];
+      } catch (fErr) {
+        console.warn('Could not load users/companies from Firestore:', fErr);
+      }
+
+      // Merge Companies from API, Firestore, and LocalStorage
+      let localComps: Company[] = [];
+      try {
+        const cached = localStorage.getItem('contsuite_cached_companies');
+        if (cached) localComps = JSON.parse(cached);
+      } catch {}
+
+      const compMap = new Map<string, Company>();
+      [...apiComps, ...firestoreCompanies, ...localComps].forEach(c => {
+        if (c && c.id) {
+          compMap.set(c.id, { ...compMap.get(c.id), ...c });
+        }
+      });
+      const mergedComps = Array.from(compMap.values());
+      if (mergedComps.length > 0) {
+        setAllCompanies(mergedComps);
+        try {
+          localStorage.setItem('contsuite_cached_companies', JSON.stringify(mergedComps));
+        } catch {}
+
+        const found = mergedComps.find(c => c.id === currentCompany.id);
         if (found) {
           setCurrentCompany(found);
-        } else if (comps.length > 0) {
-          setCurrentCompany(comps[0]);
+        } else {
+          setCurrentCompany(mergedComps[0]);
         }
       }
 
-      const usrs = await safeJson<User[]>(usersRes);
-      if (usrs && Array.isArray(usrs)) {
-        setAllUsers(usrs);
+      // Merge Users from API, Firestore, and LocalStorage
+      let localUsers: User[] = [];
+      try {
+        const cached = localStorage.getItem('contsuite_cached_users');
+        if (cached) localUsers = JSON.parse(cached);
+      } catch {}
+
+      const userMap = new Map<string, any>();
+      [...apiUsers, ...firestoreUsers, ...localUsers].forEach(u => {
+        if (u && (u.id || u.email)) {
+          const key = (u.email || u.id).toLowerCase().trim();
+          const existing = userMap.get(key) || {};
+          userMap.set(key, { ...existing, ...u });
+        }
+      });
+
+      const mergedUsers = Array.from(userMap.values()).map(u => ({
+        ...u,
+        company: mergedComps.find(c => c.id === u.companyId) || u.company,
+      }));
+
+      if (mergedUsers.length > 0) {
+        setAllUsers(mergedUsers);
+        try {
+          localStorage.setItem('contsuite_cached_users', JSON.stringify(mergedUsers));
+        } catch {}
       }
     } catch (err) {
       console.error('Error fetching companies/users:', err);
@@ -227,6 +286,7 @@ export default function App() {
         } catch (e) {
           console.warn('Could not sync user to Firestore:', e);
         }
+        await fetchCompaniesAndUsers();
         showToast(`Conectado com Google: ${user.email}`);
       }
     });
@@ -386,7 +446,7 @@ export default function App() {
     }
   };
 
-  // Invite user action
+  // Invite user action (Optimistic UI + API + Firestore + LocalStorage)
   const handleInviteUser = async (payload: {
     name: string;
     email: string;
@@ -404,9 +464,128 @@ export default function App() {
     if (!res.ok) {
       throw new Error(data.error || 'Falha ao convidar usuário');
     }
+
+    const newUserWithCompany = {
+      ...data.user,
+      company: data.company,
+    };
+
+    // 1. Optimistically update local users state immediately so it renders without delay
+    setAllUsers(prev => {
+      const filtered = prev.filter(u => u.email.toLowerCase() !== payload.email.toLowerCase());
+      const updated = [newUserWithCompany, ...filtered];
+      try {
+        localStorage.setItem('contsuite_cached_users', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+    if (data.company) {
+      setAllCompanies(prev => {
+        const filtered = prev.filter(c => c.id !== data.company.id);
+        const updated = [...filtered, data.company];
+        try {
+          localStorage.setItem('contsuite_cached_companies', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+    }
+
+    // 2. Dual persist to Firebase Firestore
+    try {
+      if (data.company) {
+        await saveCompanyToFirestore(data.company);
+      }
+      await syncUserToFirestore(data.user);
+    } catch (fErr) {
+      console.warn('Could not sync invited user to Firestore:', fErr);
+    }
+
+    // 3. Re-fetch in background
     await fetchCompaniesAndUsers();
-    showToast(`Convite de cadastramento gerado com sucesso para ${payload.email}!`);
+    showToast(`Convite gerado com sucesso! Usuário adicionado à lista "Aguardando Convite".`);
     return { user: data.user, emailPreview: data.emailPreview };
+  };
+
+  // Update user status (e.g. activate pending invitation)
+  const handleUpdateUserStatus = async (userId: string, newStatus: 'active' | 'pending') => {
+    try {
+      const res = await fetch(`/api/users/${userId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus }),
+      });
+      await safeJson<User>(res);
+      
+      setAllUsers(prev => {
+        const next = prev.map(u => u.id === userId ? { ...u, status: newStatus } : u);
+        try {
+          localStorage.setItem('contsuite_cached_users', JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+
+      const target = allUsers.find(u => u.id === userId);
+      if (target) {
+        try {
+          await syncUserToFirestore({ ...target, status: newStatus });
+        } catch (e) {
+          console.warn('Error syncing status to Firestore:', e);
+        }
+      }
+
+      showToast(`Status do usuário alterado para ${newStatus === 'active' ? 'Ativo' : 'Aguardando Convite'}`);
+    } catch (err: any) {
+      showToast(err.message || 'Erro ao atualizar status', 'error');
+    }
+  };
+
+  // Delete user or cancel invitation
+  const handleDeleteUser = async (userId: string) => {
+    try {
+      const res = await fetch(`/api/users/${userId}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Falha ao remover usuário');
+
+      setAllUsers(prev => {
+        const next = prev.filter(u => u.id !== userId);
+        try {
+          localStorage.setItem('contsuite_cached_users', JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+      showToast('Usuário / Convite removido com sucesso!');
+    } catch (err: any) {
+      showToast(err.message || 'Erro ao remover usuário', 'error');
+    }
+  };
+
+  // Resend invitation
+  const handleResendInvite = async (userId: string) => {
+    try {
+      const res = await fetch(`/api/users/${userId}/resend-invite`, { method: 'POST' });
+      const data = await safeJson<any>(res);
+      if (!res.ok || !data?.success) throw new Error(data?.error || 'Falha ao reenviar convite');
+
+      setAllUsers(prev => {
+        const next = prev.map(u => u.id === userId ? { ...u, ...data.user } : u);
+        try {
+          localStorage.setItem('contsuite_cached_users', JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+
+      if (data.user) {
+        try {
+          await syncUserToFirestore(data.user);
+        } catch {}
+      }
+
+      showToast(`Convite reenviado com sucesso para ${data.user.email}!`);
+      return data;
+    } catch (err: any) {
+      showToast(err.message || 'Erro ao reenviar convite', 'error');
+      throw err;
+    }
   };
 
   // Save new company (explicitly bound to the master user)
@@ -625,6 +804,9 @@ export default function App() {
                     if (targetUser) handleSwitchUser(targetUser);
                   }}
                   onRefreshUsers={fetchCompaniesAndUsers}
+                  onUpdateUserStatus={handleUpdateUserStatus}
+                  onDeleteUser={handleDeleteUser}
+                  onResendInvite={handleResendInvite}
                 />
               )}
             </>

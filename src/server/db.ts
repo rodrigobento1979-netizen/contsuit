@@ -150,7 +150,8 @@ export interface SystemData {
   accounts: ChartAccount[];
 }
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
+const isVercel = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+const DATA_DIR = isVercel ? path.resolve('/tmp', 'contsuite_data') : path.resolve(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 
 // Initial seed data with Rodrigo Bento as the master administrator (Clean production baseline)
@@ -214,6 +215,13 @@ function ensureDataDir() {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
     if (!fs.existsSync(DB_FILE)) {
+      const bundledPath = path.resolve(process.cwd(), 'data', 'db.json');
+      if (fs.existsSync(bundledPath)) {
+        try {
+          fs.copyFileSync(bundledPath, DB_FILE);
+          return;
+        } catch {}
+      }
       fs.writeFileSync(DB_FILE, JSON.stringify(INITIAL_DATA, null, 2), 'utf-8');
     }
   } catch (err) {
@@ -310,6 +318,17 @@ export function updateUser(id: string, updates: Partial<User>) {
     db.users[idx] = { ...db.users[idx], ...updates };
     saveDb(db);
     return db.users[idx];
+  }
+  return null;
+}
+
+export function deleteUser(id: string) {
+  const db = loadDb();
+  const idx = db.users.findIndex(u => u.id === id);
+  if (idx !== -1) {
+    const deleted = db.users.splice(idx, 1)[0];
+    saveDb(db);
+    return deleted;
   }
   return null;
 }
