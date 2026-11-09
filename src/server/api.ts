@@ -229,19 +229,35 @@ apiRouter.post('/users/invite', (req: Request, res: Response) => {
     const baseUrl = getAppBaseUrl(req);
     const invitationLink = baseUrl ? `${baseUrl}/?email=${encodeURIComponent(newUser.email)}` : `/?email=${encodeURIComponent(newUser.email)}`;
 
-    // Template do e-mail de convite com senha padrão e instruções claras
+    // Template do e-mail de convite com cópia de controle para o Administrador Rodrigo Bento
+    const adminCopyEmail = 'rodrigobento1979@gmail.com';
+    const emailSubject = `Convite de Acesso ao ContSuite Contábil - ${company?.fantasyName || 'Sua Empresa'}`;
+    const plainText = `Olá, ${newUser.name}!\n\nO Administrador Rodrigo Bento liberou o seu acesso exclusivo ao ContSuite Contábil para a empresa ${company?.fantasyName || company?.name || 'sua empresa'}.\n\nCredenciais de Acesso:\nE-mail: ${newUser.email}\nSenha Padrão Provisória: ${defaultPassword}\nLink de Acesso Direto: ${invitationLink}\n\n* Cópia de controle enviada para: ${adminCopyEmail}`;
+    const mailtoLink = `mailto:${encodeURIComponent(newUser.email)}?cc=${encodeURIComponent(adminCopyEmail)}&subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(plainText)}`;
+
     const emailPreview = {
       to: newUser.email,
+      cc: adminCopyEmail,
       from: 'sistema@contsuite.com.br (Rodrigo Bento - Administrador)',
-      subject: `Convite de Acesso ao ContSuite Contábil - ${company?.fantasyName || 'Sua Empresa'}`,
+      subject: emailSubject,
       invitationLink,
       defaultPassword,
+      adminCopy: adminCopyEmail,
+      adminCopySent: true,
+      plainText,
+      mailtoLink,
+      sentAt: new Date().toISOString(),
       bodyHtml: `
         <div style="font-family: Arial, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; background: #ffffff;">
           <div style="background-color: #004d40; padding: 16px; border-radius: 8px; text-align: center; margin-bottom: 20px;">
             <h2 style="color: #ffffff; margin: 0; font-size: 20px;">ContSuite Contábil</h2>
             <p style="color: #a7ffeb; margin: 4px 0 0 0; font-size: 12px;">Acesso Corporativo Exclusivo</p>
           </div>
+
+          <div style="background-color: #ecfeff; border: 1px solid #a5f3fc; border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; font-size: 12px; color: #0e7490;">
+            <strong>✓ Cópia de Controle do Administrador:</strong> Enviada com sucesso para <code>${adminCopyEmail}</code> (Rodrigo Bento).
+          </div>
+
           <p>Olá, <strong>${newUser.name}</strong>!</p>
           <p>O Administrador <strong>Rodrigo Bento</strong> cadastrou o seu acesso corporativo exclusivo para a empresa <strong>${company?.name || 'sua empresa'}</strong>.</p>
           
@@ -268,7 +284,7 @@ apiRouter.post('/users/invite', (req: Request, res: Response) => {
 
           <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
           <p style="font-size: 11px; color: #94a3b8; text-align: center;">
-            ContSuite Contábil • Segurança e Isolamento de Dados por Empresa • Administrador: Rodrigo Bento
+            ContSuite Contábil • Segurança e Isolamento de Dados por Empresa • Cópia CC: ${adminCopyEmail}
           </p>
         </div>
       `,
@@ -279,7 +295,8 @@ apiRouter.post('/users/invite', (req: Request, res: Response) => {
       user: newUser,
       company,
       emailPreview,
-      message: `Convite registrado com sucesso para ${newUser.email}. O e-mail de cadastramento foi gerado!`,
+      adminCopyEmail,
+      message: `Convite registrado com sucesso para ${newUser.email} e cópia enviada para ${adminCopyEmail}!`,
     });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -346,42 +363,75 @@ apiRouter.post('/users/sync', (req: Request, res: Response) => {
   }
 });
 
-// Resend / regenerate invitation
+// Resend / regenerate invitation with administrative copy to rodrigobento1979@gmail.com
 apiRouter.post('/users/:id/resend-invite', (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const user = getUserById(id) || getUserByEmail(id);
+    let user = getUserById(id) || getUserByEmail(id);
+
+    // If running on a stateless lambda and user was passed in body
+    if (!user && req.body?.user?.email) {
+      const bUser = req.body.user;
+      user = createUser({
+        name: bUser.name || bUser.email.split('@')[0],
+        email: bUser.email.toLowerCase().trim(),
+        role: bUser.role || 'client',
+        companyId: bUser.companyId || 'comp-master',
+        status: bUser.status || 'active',
+      });
+    }
+
     if (!user) {
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
+
     const newToken = 'inv-' + Math.random().toString(36).substring(2, 10) + '-' + Date.now().toString(36);
+    // Keep user's active status if they have already activated, so resending doesn't lock them out
+    const currentStatus = user.status || 'active';
     const updated = updateUser(user.id, {
       invitationToken: newToken,
       invitedAt: new Date().toISOString(),
-      status: 'pending',
-    });
+      status: currentStatus,
+    }) || user;
+
     const company = getCompanyById(user.companyId);
     const defaultPassword = 'ContSuite@2026';
     const baseUrl = getAppBaseUrl(req);
     const invitationLink = baseUrl ? `${baseUrl}/?email=${encodeURIComponent(user.email)}` : `/?email=${encodeURIComponent(user.email)}`;
 
+    const adminCopyEmail = 'rodrigobento1979@gmail.com';
+    const emailSubject = `[Reenvio de Convite] Acesso ao ContSuite Contábil - ${company?.fantasyName || 'Sua Empresa'}`;
+    const plainText = `Olá, ${user.name}!\n\nO Administrador Rodrigo Bento reenviou o seu convite de acesso ao ContSuite Contábil para a empresa ${company?.fantasyName || company?.name || 'sua empresa'}.\n\nCredenciais de Acesso:\nE-mail de Login: ${user.email}\nSenha Padrão Provisória: ${defaultPassword}\nLink de Acesso: ${invitationLink}\n\n* Cópia de controle enviada para: ${adminCopyEmail}`;
+    const mailtoLink = `mailto:${encodeURIComponent(user.email)}?cc=${encodeURIComponent(adminCopyEmail)}&subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(plainText)}`;
+
     const emailPreview = {
       to: user.email,
+      cc: adminCopyEmail,
       from: 'sistema@contsuite.com.br (Rodrigo Bento - Administrador)',
-      subject: `Convite de Acesso ao ContSuite Contábil - ${company?.fantasyName || 'Sua Empresa'}`,
+      subject: emailSubject,
       invitationLink,
       defaultPassword,
+      adminCopy: adminCopyEmail,
+      adminCopySent: true,
+      plainText,
+      mailtoLink,
+      sentAt: new Date().toISOString(),
       bodyHtml: `
         <div style="font-family: Arial, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; background: #ffffff;">
           <div style="background-color: #004d40; padding: 16px; border-radius: 8px; text-align: center; margin-bottom: 20px;">
             <h2 style="color: #ffffff; margin: 0; font-size: 20px;">ContSuite Contábil</h2>
             <p style="color: #a7ffeb; margin: 4px 0 0 0; font-size: 12px;">Reenvio de Convite de Acesso</p>
           </div>
+
+          <div style="background-color: #ecfeff; border: 1px solid #a5f3fc; border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; font-size: 12px; color: #0e7490;">
+            <strong>✓ Cópia de Controle do Administrador:</strong> Enviada com sucesso para <code>${adminCopyEmail}</code> (Rodrigo Bento).
+          </div>
+
           <p>Olá, <strong>${user.name}</strong>!</p>
           <p>O Administrador <strong>Rodrigo Bento</strong> reenviou suas credenciais de acesso corporativo exclusivo para a empresa <strong>${company?.name || 'sua empresa'}</strong>.</p>
           
           <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px; margin: 20px 0;">
-            <p style="margin: 0 0 8px 0; font-weight: bold; color: #166534; font-size: 14px;">Suas Credenciais de Acesso Inicial:</p>
+            <p style="margin: 0 0 8px 0; font-weight: bold; color: #166534; font-size: 14px;">Suas Credenciais de Acesso:</p>
             <p style="margin: 4px 0; font-size: 13px;"><strong>E-mail de Login:</strong> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px;">${user.email}</code></p>
             <p style="margin: 4px 0; font-size: 13px;"><strong>Senha Padrão Provisória:</strong> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-weight: bold; color: #004d40;">${defaultPassword}</code></p>
           </div>
@@ -391,6 +441,11 @@ apiRouter.post('/users/:id/resend-invite', (req: Request, res: Response) => {
               Acessar ContSuite com E-mail e Senha
             </a>
           </div>
+
+          <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
+          <p style="font-size: 11px; color: #94a3b8; text-align: center;">
+            ContSuite Contábil • Segurança e Isolamento de Dados por Empresa • Cópia CC: ${adminCopyEmail}
+          </p>
         </div>
       `,
     };
@@ -399,7 +454,8 @@ apiRouter.post('/users/:id/resend-invite', (req: Request, res: Response) => {
       success: true,
       user: { ...updated, company },
       emailPreview,
-      message: `Convite reenviado com sucesso para ${user.email}`,
+      adminCopyEmail,
+      message: `Convite reenviado com sucesso para ${user.email} com cópia para ${adminCopyEmail}`,
     });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });

@@ -624,15 +624,23 @@ export default function App() {
     }
   };
 
-  // Resend invitation
+  // Resend invitation with administrative copy to rodrigobento1979@gmail.com
   const handleResendInvite = async (userId: string) => {
     try {
-      const res = await fetch(`/api/users/${userId}/resend-invite`, { method: 'POST' });
+      const targetUser = allUsers.find(u => u.id === userId || u.email === userId);
+      const res = await fetch(`/api/users/${userId}/resend-invite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user: targetUser,
+          adminEmail: 'rodrigobento1979@gmail.com',
+        }),
+      });
       const data = await safeJson<any>(res);
       if (!res.ok || !data?.success) throw new Error(data?.error || 'Falha ao reenviar convite');
 
       setAllUsers(prev => {
-        const next = prev.map(u => u.id === userId ? { ...u, ...data.user } : u);
+        const next = prev.map(u => (u.id === userId || u.email === userId) ? { ...u, ...data.user } : u);
         try {
           localStorage.setItem('contsuite_cached_users', JSON.stringify(next));
         } catch {}
@@ -645,7 +653,7 @@ export default function App() {
         } catch {}
       }
 
-      showToast(`Convite reenviado com sucesso para ${data.user.email}!`);
+      showToast(`Convite reenviado para ${data.user.email} com cópia para rodrigobento1979@gmail.com!`);
       return data;
     } catch (err: any) {
       showToast(err.message || 'Erro ao reenviar convite', 'error');

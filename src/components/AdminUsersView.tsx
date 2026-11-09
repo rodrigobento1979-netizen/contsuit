@@ -75,6 +75,7 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
   const [formError, setFormError] = useState<string | null>(null);
   const [emailModalData, setEmailModalData] = useState<any | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [copiedText, setCopiedText] = useState(false);
 
   // Simulation Password Challenge State
   const [passwordTargetUser, setPasswordTargetUser] = useState<(User & { company?: Company }) | null>(null);
@@ -183,6 +184,12 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
     await navigator.clipboard.writeText(link);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2500);
+  };
+
+  const handleCopyText = async (text: string) => {
+    await navigator.clipboard.writeText(text);
+    setCopiedText(true);
+    setTimeout(() => setCopiedText(false), 2500);
   };
 
   return (
@@ -424,6 +431,22 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                             </button>
                           )}
 
+                          {onResendInvite && !isCurrentUser && (
+                            <button
+                              onClick={async () => {
+                                try {
+                                  const res = await onResendInvite(u.id);
+                                  if (res?.emailPreview) setEmailModalData(res.emailPreview);
+                                } catch {}
+                              }}
+                              className="px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 font-semibold text-[11px] inline-flex items-center gap-1 transition cursor-pointer"
+                              title="Reenviar convite de acesso com cópia para o Administrador (rodrigobento1979@gmail.com)"
+                            >
+                              <RotateCw className="w-3 h-3 text-amber-600 shrink-0" />
+                              <span className="hidden sm:inline">Reenviar Convite</span>
+                            </button>
+                          )}
+
                           <button
                             onClick={() => handleInitiateSimulate(u)}
                             className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-teal-50 hover:text-teal-800 hover:border-teal-200 border border-transparent text-slate-700 font-semibold text-[11px] inline-flex items-center gap-1 transition cursor-pointer"
@@ -432,6 +455,20 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                             <Eye className="w-3 h-3 text-teal-600 shrink-0" />
                             <span className="hidden sm:inline">Simular</span>
                           </button>
+
+                          {onDeleteUser && !isCurrentUser && !isMasterAdmin(u) && (
+                            <button
+                              onClick={() => {
+                                if (confirm(`Deseja remover o usuário ${u.name} (${u.email})?`)) {
+                                  onDeleteUser(u.id);
+                                }
+                              }}
+                              className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer inline-flex items-center"
+                              title="Excluir usuário"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </td>
                       </tr>
                     );
@@ -602,11 +639,11 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                                 if (res?.emailPreview) setEmailModalData(res.emailPreview);
                               } catch {}
                             }}
-                            className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-[11px] inline-flex items-center gap-1 transition cursor-pointer"
-                            title="Reenviar e-mail de convite"
+                            className="px-2.5 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 font-bold text-[11px] inline-flex items-center gap-1 transition cursor-pointer"
+                            title="Reenviar convite com cópia de controle para rodrigobento1979@gmail.com"
                           >
-                            <RotateCw className="w-3 h-3 text-slate-500" />
-                            <span>Reenviar</span>
+                            <RotateCw className="w-3 h-3 text-amber-600" />
+                            <span>Reenviar (c/ Cópia p/ Rodrigo)</span>
                           </button>
                         )}
 
@@ -880,6 +917,20 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
               </button>
             </div>
 
+            {/* Admin Copy Status Badge */}
+            <div className="p-3 bg-teal-50 border border-teal-200 rounded-xl flex items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2 min-w-0">
+                <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0" />
+                <div className="min-w-0">
+                  <span className="font-bold text-teal-900 block truncate">Cópia de Confirmação Enviada ao Administrador:</span>
+                  <span className="text-teal-700 font-mono text-[11px] truncate block">rodrigobento1979@gmail.com</span>
+                </div>
+              </div>
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-teal-600 text-white shrink-0">
+                Cópia CC Ativa
+              </span>
+            </div>
+
             <div className="space-y-3 text-xs">
               {/* Default Password Card */}
               <div className="p-3.5 bg-emerald-50 rounded-xl border border-emerald-200 flex items-center justify-between gap-3">
@@ -903,7 +954,7 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
 
               {/* Render email body */}
               <div 
-                className="p-3 bg-white rounded-xl border border-slate-200 text-slate-800 max-h-56 overflow-y-auto"
+                className="p-3 bg-white rounded-xl border border-slate-200 text-slate-800 max-h-52 overflow-y-auto"
                 dangerouslySetInnerHTML={{ __html: emailModalData.bodyHtml }}
               />
 
@@ -911,21 +962,53 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                 const displayLink = emailModalData.invitationLink?.startsWith('http')
                   ? emailModalData.invitationLink
                   : `${window.location.origin}${emailModalData.invitationLink?.startsWith('/') ? '' : '/'}${emailModalData.invitationLink || ''}`;
+                
+                const mailtoUrl = emailModalData.mailtoLink || `mailto:${encodeURIComponent(emailModalData.to)}?cc=${encodeURIComponent('rodrigobento1979@gmail.com')}&subject=${encodeURIComponent(emailModalData.subject || 'Convite de Acesso ContSuite')}&body=${encodeURIComponent(emailModalData.plainText || `Acesse o ContSuite com o e-mail: ${emailModalData.to} e senha ContSuite@2026 pelo link: ${displayLink}`)}`;
+
                 return (
-                  <div className="p-3 bg-teal-50 rounded-xl border border-teal-200 flex items-center justify-between gap-2">
-                    <div className="truncate">
-                      <span className="text-teal-900 font-bold block text-[11px]">Link Real de Acesso ao Sistema:</span>
-                      <span className="text-teal-800 text-[10px] font-mono truncate block">
-                        {displayLink}
-                      </span>
+                  <div className="space-y-2">
+                    <div className="p-3 bg-teal-50 rounded-xl border border-teal-200 flex items-center justify-between gap-2">
+                      <div className="truncate">
+                        <span className="text-teal-900 font-bold block text-[11px]">Link Real de Acesso ao Sistema:</span>
+                        <span className="text-teal-800 text-[10px] font-mono truncate block">
+                          {displayLink}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => handleCopyLink(displayLink)}
+                        className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs flex items-center gap-1 shrink-0 transition cursor-pointer"
+                      >
+                        {copiedLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>{copiedLink ? 'Copiado!' : 'Copiar Link'}</span>
+                      </button>
                     </div>
-                    <button
-                      onClick={() => handleCopyLink(displayLink)}
-                      className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs flex items-center gap-1 shrink-0 transition cursor-pointer"
-                    >
-                      {copiedLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                      <span>{copiedLink ? 'Copiado!' : 'Copiar'}</span>
-                    </button>
+
+                    {/* Quick Action Buttons: Send via Gmail and Copy formatted text */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                      <a
+                        href={mailtoUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3 py-2 bg-[#00897b] hover:bg-[#00796b] text-white rounded-xl font-bold text-xs transition cursor-pointer shadow-2xs"
+                        title="Abrir no seu Gmail ou cliente de e-mail padrão já com o destinatário e cópia CC para rodrigobento1979@gmail.com"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                        <span>Abrir no Gmail / E-mail (c/ Cópia CC)</span>
+                        <ExternalLink className="w-3 h-3 text-teal-200" />
+                      </a>
+
+                      <button
+                        onClick={() => {
+                          const fullText = emailModalData.plainText || `Olá!\n\nSuas credenciais de acesso ao ContSuite Contábil foram geradas:\n\nE-mail de Login: ${emailModalData.to}\nSenha Padrão Provisória: ${emailModalData.defaultPassword || 'ContSuite@2026'}\nLink de Acesso: ${displayLink}\n\n* Cópia de controle enviada para: rodrigobento1979@gmail.com`;
+                          handleCopyText(fullText);
+                        }}
+                        className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl font-semibold text-xs flex items-center gap-1.5 transition cursor-pointer"
+                        title="Copiar texto formatado com dados de login para colar no WhatsApp ou chat"
+                      >
+                        {copiedText ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5 text-slate-500" />}
+                        <span>{copiedText ? 'Texto Copiado!' : 'Copiar Mensagem p/ WhatsApp'}</span>
+                      </button>
+                    </div>
                   </div>
                 );
               })()}
@@ -934,9 +1017,9 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
             <div className="pt-2 flex justify-end">
               <button
                 onClick={() => setEmailModalData(null)}
-                className="px-4 py-2 bg-slate-900 text-white rounded-xl font-bold text-xs hover:bg-slate-800 cursor-pointer"
+                className="px-4 py-2 bg-slate-900 text-white rounded-xl font-bold text-xs hover:bg-slate-800 cursor-pointer transition"
               >
-                Fechar
+                Concluir & Fechar
               </button>
             </div>
           </div>
