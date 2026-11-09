@@ -197,3 +197,13 @@ export async function syncUserToFirestore(user: User): Promise<void> {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
+
+export async function deleteUserFromFirestore(userId: string): Promise<void> {
+  if (!auth.currentUser || !userId) return;
+  const path = `users/${userId}`;
+  try {
+    await deleteDoc(doc(db, 'users', userId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}

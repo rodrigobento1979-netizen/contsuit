@@ -497,7 +497,7 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
               {pendingUsers.map((u) => {
-                const inviteLink = `https://contsuite.app/login?email=${encodeURIComponent(u.email)}`;
+                const inviteLink = `${window.location.origin}/?email=${encodeURIComponent(u.email)}`;
                 return (
                   <div
                     key={u.id}
@@ -907,21 +907,28 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                 dangerouslySetInnerHTML={{ __html: emailModalData.bodyHtml }}
               />
 
-              <div className="p-3 bg-teal-50 rounded-xl border border-teal-200 flex items-center justify-between gap-2">
-                <div className="truncate">
-                  <span className="text-teal-900 font-bold block text-[11px]">Link de Acesso ao Sistema:</span>
-                  <span className="text-teal-800 text-[10px] font-mono truncate block">
-                    {emailModalData.invitationLink}
-                  </span>
-                </div>
-                <button
-                  onClick={() => handleCopyLink(emailModalData.invitationLink)}
-                  className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs flex items-center gap-1 shrink-0 transition cursor-pointer"
-                >
-                  {copiedLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedLink ? 'Copiado!' : 'Copiar'}</span>
-                </button>
-              </div>
+              {(() => {
+                const displayLink = emailModalData.invitationLink?.startsWith('http')
+                  ? emailModalData.invitationLink
+                  : `${window.location.origin}${emailModalData.invitationLink?.startsWith('/') ? '' : '/'}${emailModalData.invitationLink || ''}`;
+                return (
+                  <div className="p-3 bg-teal-50 rounded-xl border border-teal-200 flex items-center justify-between gap-2">
+                    <div className="truncate">
+                      <span className="text-teal-900 font-bold block text-[11px]">Link Real de Acesso ao Sistema:</span>
+                      <span className="text-teal-800 text-[10px] font-mono truncate block">
+                        {displayLink}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => handleCopyLink(displayLink)}
+                      className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs flex items-center gap-1 shrink-0 transition cursor-pointer"
+                    >
+                      {copiedLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedLink ? 'Copiado!' : 'Copiar'}</span>
+                    </button>
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="pt-2 flex justify-end">

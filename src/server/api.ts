@@ -88,6 +88,25 @@ apiRouter.use((req: any, res: any, next: any) => {
   }
 });
 
+// Helper to dynamically resolve the real origin/base URL of the app
+function getAppBaseUrl(req: Request): string {
+  const origin = req.get('origin');
+  if (origin && !origin.includes('localhost:3000')) return origin;
+  const referer = req.get('referer');
+  if (referer) {
+    try {
+      const u = new URL(referer);
+      return u.origin;
+    } catch {}
+  }
+  const host = req.get('host');
+  if (host) {
+    const proto = req.secure || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
+    return `${proto}://${host}`;
+  }
+  return '';
+}
+
 // Health check
 apiRouter.get('/health', (req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -123,6 +142,11 @@ apiRouter.post('/auth/login', (req: Request, res: Response) => {
       return res.status(404).json({
         error: 'Usuário não encontrado. Solicite o convite ao Administrador (Rodrigo Bento).',
       });
+    }
+
+    // Auto-activate user on first login if status was pending
+    if (user.status === 'pending') {
+      user = updateUser(user.id, { status: 'active' }) || user;
     }
 
     const company = getCompanyById(user.companyId);
@@ -202,13 +226,15 @@ apiRouter.post('/users/invite', (req: Request, res: Response) => {
     } as any);
 
     const company = getCompanyById(targetCompanyId);
+    const baseUrl = getAppBaseUrl(req);
+    const invitationLink = baseUrl ? `${baseUrl}/?email=${encodeURIComponent(newUser.email)}` : `/?email=${encodeURIComponent(newUser.email)}`;
 
     // Template do e-mail de convite com senha padrão e instruções claras
     const emailPreview = {
       to: newUser.email,
       from: 'sistema@contsuite.com.br (Rodrigo Bento - Administrador)',
       subject: `Convite de Acesso ao ContSuite Contábil - ${company?.fantasyName || 'Sua Empresa'}`,
-      invitationLink: `https://contsuite.app/login?email=${encodeURIComponent(newUser.email)}`,
+      invitationLink,
       defaultPassword,
       bodyHtml: `
         <div style="font-family: Arial, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; background: #ffffff;">
@@ -235,7 +261,7 @@ apiRouter.post('/users/invite', (req: Request, res: Response) => {
           </ul>
 
           <div style="margin: 28px 0; text-align: center;">
-            <a href="https://contsuite.app/login" style="background-color: #00897b; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; display: inline-block;">
+            <a href="${invitationLink}" style="background-color: #00897b; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; display: inline-block;">
               Acessar ContSuite com E-mail e Senha
             </a>
           </div>
@@ -279,15 +305,42 @@ apiRouter.patch('/users/:id', (req: Request, res: Response) => {
   }
 });
 
-// Delete user or cancel invitation
+// Delete user or cancel invitation (resilient: returns success even if already deleted from db.json)
 apiRouter.delete('/users/:id', (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const deleted = deleteUser(id);
-    if (!deleted) {
-      return res.status(404).json({ error: 'Usuário não encontrado' });
+    return res.json({ success: true, deletedUser: deleted || { id } });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Sync user from client / Firestore to backend memory & disk
+apiRouter.post('/users/sync', (req: Request, res: Response) => {
+  try {
+    const { user, company } = req.body;
+    if (!user || !user.email) {
+      return res.status(400).json({ error: 'Dados do usuário inválidos' });
     }
-    return res.json({ success: true, deletedUser: deleted });
+    const normEmail = user.email.toLowerCase().trim();
+    let existing = getUserByEmail(normEmail);
+    if (!existing) {
+      if (company && !getCompanyById(company.id)) {
+        createCompany(company);
+      }
+      existing = createUser({
+        name: user.name || normEmail.split('@')[0],
+        email: normEmail,
+        role: user.role || 'client',
+        companyId: user.companyId || (company?.id || 'comp-master'),
+        status: user.status || 'active',
+        invitationToken: user.invitationToken,
+        invitedAt: user.invitedAt,
+      });
+    }
+    const targetComp = getCompanyById(existing.companyId);
+    return res.json({ success: true, user: existing, company: targetComp });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -297,24 +350,26 @@ apiRouter.delete('/users/:id', (req: Request, res: Response) => {
 apiRouter.post('/users/:id/resend-invite', (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const user = getUserById(id);
+    const user = getUserById(id) || getUserByEmail(id);
     if (!user) {
       return res.status(404).json({ error: 'Usuário não encontrado' });
     }
     const newToken = 'inv-' + Math.random().toString(36).substring(2, 10) + '-' + Date.now().toString(36);
-    const updated = updateUser(id, {
+    const updated = updateUser(user.id, {
       invitationToken: newToken,
       invitedAt: new Date().toISOString(),
       status: 'pending',
     });
     const company = getCompanyById(user.companyId);
     const defaultPassword = 'ContSuite@2026';
+    const baseUrl = getAppBaseUrl(req);
+    const invitationLink = baseUrl ? `${baseUrl}/?email=${encodeURIComponent(user.email)}` : `/?email=${encodeURIComponent(user.email)}`;
 
     const emailPreview = {
       to: user.email,
       from: 'sistema@contsuite.com.br (Rodrigo Bento - Administrador)',
       subject: `Convite de Acesso ao ContSuite Contábil - ${company?.fantasyName || 'Sua Empresa'}`,
-      invitationLink: `https://contsuite.app/login?email=${encodeURIComponent(user.email)}`,
+      invitationLink,
       defaultPassword,
       bodyHtml: `
         <div style="font-family: Arial, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; background: #ffffff;">
@@ -332,7 +387,7 @@ apiRouter.post('/users/:id/resend-invite', (req: Request, res: Response) => {
           </div>
 
           <div style="margin: 28px 0; text-align: center;">
-            <a href="https://contsuite.app/login?email=${encodeURIComponent(user.email)}" style="background-color: #00897b; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; display: inline-block;">
+            <a href="${invitationLink}" style="background-color: #00897b; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; display: inline-block;">
               Acessar ContSuite com E-mail e Senha
             </a>
           </div>

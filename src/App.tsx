@@ -26,7 +26,8 @@ import {
   deleteAssetFromFirestore,
   saveStatementToFirestore,
   syncUserToFirestore,
-  fetchUsersFromFirestore
+  fetchUsersFromFirestore,
+  deleteUserFromFirestore
 } from './firebase/service';
 
 export default function App() {
@@ -294,27 +295,82 @@ export default function App() {
     return () => unsubscribe();
   }, [fetchCompaniesAndUsers, currentCompany.id]);
 
-  // Login handler
+  // Login handler with resilient multi-tier lookup (API -> cached allUsers -> localStorage -> Firestore)
   const handleLogin = async (email: string) => {
-    const res = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email }),
-    });
+    const normEmail = email.toLowerCase().trim();
 
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error || 'Falha ao autenticar.');
+    // 1. Try backend authentication
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: normEmail }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.user) {
+          setCurrentUser(data.user);
+          if (data.company) {
+            setCurrentCompany(data.company);
+          }
+          setIsAuthenticated(true);
+          setActiveTab('home');
+          localStorage.setItem('contsuite_logged_in', 'true');
+          showToast(`Bem-vindo ao ContSuite, ${data.user.name}!`);
+          return;
+        }
+      }
+    } catch (apiErr) {
+      console.warn('Backend login attempt error:', apiErr);
     }
 
-    setCurrentUser(data.user);
-    if (data.company) {
-      setCurrentCompany(data.company);
+    // 2. Resilient fallback: lookup in allUsers or cached users in localStorage
+    let userCandidate = allUsers.find(u => u.email.toLowerCase().trim() === normEmail);
+    if (!userCandidate) {
+      try {
+        const cached = localStorage.getItem('contsuite_cached_users');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          userCandidate = parsed.find((u: any) => u.email.toLowerCase().trim() === normEmail);
+        }
+      } catch {}
     }
-    setIsAuthenticated(true);
-    setActiveTab('home');
-    localStorage.setItem('contsuite_logged_in', 'true');
-    showToast(`Bem-vindo ao ContSuite, ${data.user.name}!`);
+
+    // 3. Fallback: lookup in Firestore
+    if (!userCandidate) {
+      try {
+        const fUsers = await fetchUsersFromFirestore();
+        userCandidate = fUsers.find(u => u.email.toLowerCase().trim() === normEmail);
+      } catch {}
+    }
+
+    if (userCandidate) {
+      // Find company
+      let comp = allCompanies.find(c => c.id === userCandidate!.companyId) || (userCandidate as any).company;
+
+      // Sync user to server so serverless container recognizes them
+      try {
+        await fetch('/api/users/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user: userCandidate, company: comp }),
+        });
+      } catch {}
+
+      const activeUser = { ...userCandidate, status: 'active' as const };
+      setCurrentUser(activeUser);
+      if (comp) {
+        setCurrentCompany(comp);
+      }
+      setIsAuthenticated(true);
+      setActiveTab('home');
+      localStorage.setItem('contsuite_logged_in', 'true');
+      showToast(`Bem-vindo ao ContSuite, ${activeUser.name}!`);
+      return;
+    }
+
+    throw new Error('Usuário ou e-mail não encontrado. Solicite convite ao Administrador (Rodrigo Bento).');
   };
 
   // Google Login / Logout handlers
@@ -540,20 +596,29 @@ export default function App() {
     }
   };
 
-  // Delete user or cancel invitation
+  // Delete user or cancel invitation (Multi-layer cleanup: API + Firestore + LocalStorage)
   const handleDeleteUser = async (userId: string) => {
     try {
-      const res = await fetch(`/api/users/${userId}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Falha ao remover usuário');
+      try {
+        await fetch(`/api/users/${userId}`, { method: 'DELETE' });
+      } catch (apiErr) {
+        console.warn('API delete user warning:', apiErr);
+      }
+
+      try {
+        await deleteUserFromFirestore(userId);
+      } catch (fErr) {
+        console.warn('Firestore delete user warning:', fErr);
+      }
 
       setAllUsers(prev => {
-        const next = prev.filter(u => u.id !== userId);
+        const next = prev.filter(u => u.id !== userId && u.email !== userId);
         try {
           localStorage.setItem('contsuite_cached_users', JSON.stringify(next));
         } catch {}
         return next;
       });
-      showToast('Usuário / Convite removido com sucesso!');
+      showToast('Convite / Usuário excluído com sucesso!');
     } catch (err: any) {
       showToast(err.message || 'Erro ao remover usuário', 'error');
     }

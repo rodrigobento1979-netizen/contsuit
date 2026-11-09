@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   User as UserIcon, 
   Lock, 
@@ -9,7 +9,8 @@ import {
   Building2,
   HelpCircle,
   Loader2,
-  Sparkles
+  Sparkles,
+  CheckCircle2
 } from 'lucide-react';
 import { Company } from '../types';
 import { ContSuiteLogo } from './ContSuiteLogo';
@@ -26,11 +27,27 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   allCompanies,
 }) => {
   const [email, setEmail] = useState('rodrigobento1979@gmail.com');
-  const [password, setPassword] = useState('••••••••');
+  const [password, setPassword] = useState('ContSuite@2026');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showDemoAccounts, setShowDemoAccounts] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
+  const [invitedEmailDetected, setInvitedEmailDetected] = useState<string | null>(null);
+
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const emailParam = params.get('email') || params.get('convite');
+      if (emailParam) {
+        const clean = emailParam.trim().toLowerCase();
+        setEmail(clean);
+        setPassword('ContSuite@2026');
+        setInvitedEmailDetected(clean);
+      }
+    } catch (e) {
+      console.warn('Could not parse url params:', e);
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -171,6 +188,18 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 Bem-vindo ao <span className="text-teal-700 font-bold">ContSuite</span>
               </p>
             </div>
+
+            {invitedEmailDetected && (
+              <div className="mb-4 p-3.5 rounded-xl bg-teal-50 border border-teal-200 text-teal-900 text-xs flex items-start gap-2.5 shadow-2xs animate-in fade-in">
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-teal-600 mt-0.5" />
+                <div className="space-y-0.5">
+                  <p className="font-bold text-teal-950">Convite de Acesso Confirmado!</p>
+                  <p className="text-[11px] text-teal-800 leading-relaxed">
+                    Identificamos o seu convite para <strong>{invitedEmailDetected}</strong>. Preenchemos a senha provisória padrão (<code className="font-mono font-bold bg-white px-1 rounded border border-teal-300">ContSuite@2026</code>). Clique em <strong>LOGIN</strong> para acessar sua empresa.
+                  </p>
+                </div>
+              </div>
+            )}
 
             {error && (
               <div className="mb-5 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">

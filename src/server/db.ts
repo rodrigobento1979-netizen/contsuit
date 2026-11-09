@@ -324,7 +324,12 @@ export function updateUser(id: string, updates: Partial<User>) {
 
 export function deleteUser(id: string) {
   const db = loadDb();
-  const idx = db.users.findIndex(u => u.id === id);
+  const lower = id.toLowerCase().trim();
+  const idx = db.users.findIndex(u => 
+    u.id === id || 
+    u.email.toLowerCase().trim() === lower || 
+    (u.invitationToken && u.invitationToken === id)
+  );
   if (idx !== -1) {
     const deleted = db.users.splice(idx, 1)[0];
     saveDb(db);
