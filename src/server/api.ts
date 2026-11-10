@@ -49,6 +49,13 @@ import {
   StatementExtractionResult,
 } from './ofx-ai.ts';
 import { askContSuiteAgent } from './guide-ai.ts';
+import {
+  sendEmail,
+  getSmtpConfig,
+  saveSmtpConfig,
+  testSmtpConnection,
+  SmtpConfig,
+} from './email.ts';
 
 export const apiRouter = express.Router();
 
@@ -178,7 +185,7 @@ apiRouter.get('/users', (req: Request, res: Response) => {
   }
 });
 
-apiRouter.post('/users/invite', (req: Request, res: Response) => {
+apiRouter.post('/users/invite', async (req: Request, res: Response) => {
   try {
     const { name, email, role, companyName, cnpj, existingCompanyId } = req.body;
 
@@ -290,13 +297,40 @@ apiRouter.post('/users/invite', (req: Request, res: Response) => {
       `,
     };
 
+    // Tenta envio direto para a caixa postal via SMTP (se configurado)
+    let directDelivery: { sent: boolean; error?: string; messageId?: string; senderAddress?: string } = {
+      sent: false,
+      error: 'SMTP não configurado',
+    };
+    try {
+      directDelivery = await sendEmail({
+        to: newUser.email,
+        cc: adminCopyEmail,
+        subject: emailSubject,
+        html: emailPreview.bodyHtml,
+        text: plainText,
+      });
+    } catch (e: any) {
+      directDelivery = { sent: false, error: e.message };
+    }
+
+    const emailPreviewWithDelivery = {
+      ...emailPreview,
+      directDelivery,
+    };
+
+    const message = directDelivery.sent
+      ? `E-mail enviado diretamente para ${newUser.email} com cópia para ${adminCopyEmail}!`
+      : `Convite gerado para ${newUser.email}. Configure os dados de SMTP nas configurações para envio 100% automático pela nuvem.`;
+
     return res.json({
       success: true,
       user: newUser,
       company,
-      emailPreview,
+      emailPreview: emailPreviewWithDelivery,
       adminCopyEmail,
-      message: `Convite registrado com sucesso para ${newUser.email} e cópia enviada para ${adminCopyEmail}!`,
+      directDelivery,
+      message,
     });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -364,7 +398,7 @@ apiRouter.post('/users/sync', (req: Request, res: Response) => {
 });
 
 // Resend / regenerate invitation with administrative copy to rodrigobento1979@gmail.com
-apiRouter.post('/users/:id/resend-invite', (req: Request, res: Response) => {
+apiRouter.post('/users/:id/resend-invite', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     let user = getUserById(id) || getUserByEmail(id);
@@ -450,13 +484,111 @@ apiRouter.post('/users/:id/resend-invite', (req: Request, res: Response) => {
       `,
     };
 
+    // Tenta envio direto para a caixa postal via SMTP (se configurado)
+    let directDelivery: { sent: boolean; error?: string; messageId?: string; senderAddress?: string } = {
+      sent: false,
+      error: 'SMTP não configurado',
+    };
+    try {
+      directDelivery = await sendEmail({
+        to: user.email,
+        cc: adminCopyEmail,
+        subject: emailSubject,
+        html: emailPreview.bodyHtml,
+        text: plainText,
+      });
+    } catch (e: any) {
+      directDelivery = { sent: false, error: e.message };
+    }
+
+    const emailPreviewWithDelivery = {
+      ...emailPreview,
+      directDelivery,
+    };
+
+    const message = directDelivery.sent
+      ? `E-mail reenviado diretamente para ${user.email} com cópia para ${adminCopyEmail}!`
+      : `Convite reenviado com sucesso para ${user.email} com cópia para ${adminCopyEmail}`;
+
     return res.json({
       success: true,
       user: { ...updated, company },
-      emailPreview,
+      emailPreview: emailPreviewWithDelivery,
       adminCopyEmail,
-      message: `Convite reenviado com sucesso para ${user.email} com cópia para ${adminCopyEmail}`,
+      directDelivery,
+      message,
     });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------
+// EMAIL SETTINGS & SMTP CONFIGURATION
+// ---------------------------------------------------------
+apiRouter.get('/email/settings', (req: Request, res: Response) => {
+  try {
+    const cfg = getSmtpConfig();
+    return res.json({
+      configured: !!cfg,
+      host: cfg?.host || '',
+      port: cfg?.port || 587,
+      secure: cfg?.secure || false,
+      user: cfg?.user || '',
+      fromName: cfg?.fromName || 'ContSuite Contábil',
+      fromEmail: cfg?.fromEmail || '',
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/email/settings', async (req: Request, res: Response) => {
+  try {
+    const { host, port, secure, user, pass, fromName, fromEmail, testNow } = req.body;
+    if (!host || !user || !pass) {
+      return res.status(400).json({ error: 'Host SMTP, Usuário/E-mail e Senha de Aplicativo são obrigatórios.' });
+    }
+
+    const cfg: SmtpConfig = {
+      host: host.trim(),
+      port: Number(port) || 587,
+      secure: Boolean(secure),
+      user: user.trim(),
+      pass: pass.trim(),
+      fromName: fromName?.trim() || 'ContSuite Contábil',
+      fromEmail: fromEmail?.trim() || user.trim(),
+    };
+
+    saveSmtpConfig(cfg);
+
+    let testResult: any = null;
+    if (testNow) {
+      testResult = await testSmtpConnection(cfg, 'rodrigobento1979@gmail.com');
+    }
+
+    return res.json({
+      success: true,
+      message: testResult?.message || 'Configurações de e-mail SMTP salvas com sucesso no ContSuite!',
+      testResult,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/email/test', async (req: Request, res: Response) => {
+  try {
+    const cfg = getSmtpConfig();
+    if (!cfg) {
+      return res.status(400).json({ error: 'Nenhum servidor SMTP configurado no momento.' });
+    }
+    const recipient = req.body?.recipient || 'rodrigobento1979@gmail.com';
+    const result = await testSmtpConnection(cfg, recipient);
+    if (!result.success) {
+      return res.status(400).json({ error: result.message });
+    }
+    return res.json({ success: true, message: result.message });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
