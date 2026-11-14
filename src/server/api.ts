@@ -44,6 +44,7 @@ import {
 } from './depreciation.ts';
 import {
   parseStatementWithAI,
+  mergeExtractionResults,
   generateOfxFile,
   suggestAssetClassificationWithAI,
   StatementExtractionResult,
@@ -838,6 +839,48 @@ apiRouter.post('/assets/:id/disposal', (req: Request, res: Response) => {
 // ---------------------------------------------------------
 // OFX CONVERTER & AI EXTRACTION
 // ---------------------------------------------------------
+function buildConvertedStatementRecord(
+  extractionResult: StatementExtractionResult,
+  ofxContent: string
+) {
+  const totalDebits = extractionResult.transactions
+    .filter(t => t.type === 'DEBIT')
+    .reduce((sum, t) => sum + Math.abs(t.amount), 0);
+
+  const totalCredits = extractionResult.transactions
+    .filter(t => t.type === 'CREDIT')
+    .reduce((sum, t) => sum + Math.abs(t.amount), 0);
+
+  return {
+    bankName: extractionResult.bankName,
+    bankCode: extractionResult.bankCode,
+    agency: extractionResult.agency,
+    accountNumber: extractionResult.accountNumber,
+    accountType: extractionResult.accountType || 'CHECKING',
+    startDate: extractionResult.startDate,
+    endDate: extractionResult.endDate,
+    openingBalance: extractionResult.openingBalance || 0,
+    closingBalance: extractionResult.closingBalance || 0,
+    extractedCnpj: extractionResult.extractedCnpj,
+    extractedCompanyName: extractionResult.extractedCompanyName,
+    totalPages: extractionResult.totalPages || 1,
+    pagesProcessed: extractionResult.pagesProcessed || extractionResult.totalPages || 1,
+    totalDebits: Number(totalDebits.toFixed(2)),
+    totalCredits: Number(totalCredits.toFixed(2)),
+    transactionsCount: extractionResult.transactions.length,
+    transactions: extractionResult.transactions.map((t, idx) => ({
+      id: `tx-${idx + 1}`,
+      date: t.date,
+      type: t.type,
+      amount: Math.abs(t.amount),
+      memo: t.memo,
+      fitid: t.fitid || `${t.date.replace(/-/g, '')}${String(idx + 1).padStart(5, '0')}`,
+      category: t.category,
+    })),
+    ofxContent,
+  };
+}
+
 apiRouter.post('/ofx/convert', async (req: Request, res: Response) => {
   try {
     const { fileBase64, mimeType, rawText, bankHint, companyId } = req.body;
@@ -846,7 +889,7 @@ apiRouter.post('/ofx/convert', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Nenhum arquivo ou texto de extrato fornecido.' });
     }
 
-    // Call Gemini AI
+    // Call Gemini AI (automatically splits multi-page PDFs into batches)
     const extractionResult: StatementExtractionResult = await parseStatementWithAI({
       fileBase64,
       mimeType,
@@ -854,52 +897,15 @@ apiRouter.post('/ofx/convert', async (req: Request, res: Response) => {
       bankHint,
     });
 
-    // Generate compliant OFX 1.02
     const ofxContent = generateOfxFile(extractionResult);
+    const convertedRecord = buildConvertedStatementRecord(extractionResult, ofxContent);
 
-    // Calculate totals
-    const totalDebits = extractionResult.transactions
-      .filter(t => t.type === 'DEBIT')
-      .reduce((sum, t) => sum + Math.abs(t.amount), 0);
-
-    const totalCredits = extractionResult.transactions
-      .filter(t => t.type === 'CREDIT')
-      .reduce((sum, t) => sum + Math.abs(t.amount), 0);
-
-    const convertedRecord = {
-      bankName: extractionResult.bankName,
-      bankCode: extractionResult.bankCode,
-      agency: extractionResult.agency,
-      accountNumber: extractionResult.accountNumber,
-      accountType: extractionResult.accountType || 'CHECKING',
-      startDate: extractionResult.startDate,
-      endDate: extractionResult.endDate,
-      openingBalance: extractionResult.openingBalance || 0,
-      closingBalance: extractionResult.closingBalance || 0,
-      extractedCnpj: extractionResult.extractedCnpj,
-      extractedCompanyName: extractionResult.extractedCompanyName,
-      totalDebits: Number(totalDebits.toFixed(2)),
-      totalCredits: Number(totalCredits.toFixed(2)),
-      transactionsCount: extractionResult.transactions.length,
-      transactions: extractionResult.transactions.map((t, idx) => ({
-        id: `tx-${idx + 1}`,
-        date: t.date,
-        type: t.type,
-        amount: Math.abs(t.amount),
-        memo: t.memo,
-        fitid: t.fitid || `${t.date.replace(/-/g, '')}${String(idx + 1).padStart(4, '0')}`,
-        category: t.category,
-      })),
-      ofxContent,
-    };
-
-    // Auto-save statement to company history if companyId provided
     let savedStatement = null;
     if (companyId) {
       savedStatement = saveStatement({
         companyId,
         originalFileName: req.body.fileName || 'extrato_convertido.pdf',
-        fileBase64: req.body.fileBase64,
+        fileBase64: req.body.fileBase64 && req.body.fileBase64.length < 3_500_000 ? req.body.fileBase64 : undefined,
         fileMimeType: req.body.mimeType || 'application/pdf',
         ...convertedRecord,
       });
@@ -911,8 +917,72 @@ apiRouter.post('/ofx/convert', async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     console.error('Error during OFX AI conversion:', err);
-    return res.status(500).json({
+    const statusCode = err?.status === 429 || err?.status === 403 || err?.status === 400 ? err.status : 500;
+    return res.status(statusCode).json({
       error: err.message || 'Falha ao processar o extrato com Inteligência Artificial.',
+    });
+  }
+});
+
+// Extract a single PDF page batch (used by frontend progress-aware multi-page reader)
+apiRouter.post('/ofx/extract-chunk', async (req: Request, res: Response) => {
+  try {
+    const { fileBase64, mimeType, bankHint } = req.body;
+    if (!fileBase64) {
+      return res.status(400).json({ error: 'Bloco de páginas do extrato não enviado.' });
+    }
+
+    // parseStatementWithAI handles page splitting automatically even inside a multi-page batch if dense
+    const extraction = await parseStatementWithAI({
+      fileBase64,
+      mimeType: mimeType || 'application/pdf',
+      bankHint,
+    });
+
+    return res.json({
+      success: true,
+      extraction,
+    });
+  } catch (err: any) {
+    console.error('Error during OFX chunk extraction:', err);
+    const statusCode = err?.status === 429 || err?.status === 403 || err?.status === 400 ? err.status : 500;
+    return res.status(statusCode).json({
+      error: err.message || 'Falha ao ler bloco de páginas do extrato.',
+    });
+  }
+});
+
+// Finalize and merge multiple extracted page chunks into a single OFX 1.02 statement
+apiRouter.post('/ofx/finalize', async (req: Request, res: Response) => {
+  try {
+    const { chunks, totalPages, pagesProcessed, companyId, fileName, fileBase64, mimeType } = req.body;
+    if (!Array.isArray(chunks) || chunks.length === 0) {
+      return res.status(400).json({ error: 'Nenhum lote de transações recebido para consolidação.' });
+    }
+
+    const merged = mergeExtractionResults(chunks, totalPages, pagesProcessed || totalPages);
+    const ofxContent = generateOfxFile(merged);
+    const convertedRecord = buildConvertedStatementRecord(merged, ofxContent);
+
+    let savedStatement = null;
+    if (companyId) {
+      savedStatement = saveStatement({
+        companyId,
+        originalFileName: fileName || 'extrato_multipagina.pdf',
+        fileBase64: fileBase64 && fileBase64.length < 3_500_000 ? fileBase64 : undefined,
+        fileMimeType: mimeType || 'application/pdf',
+        ...convertedRecord,
+      });
+    }
+
+    return res.json({
+      success: true,
+      statement: savedStatement || convertedRecord,
+    });
+  } catch (err: any) {
+    console.error('Error during OFX finalize:', err);
+    return res.status(500).json({
+      error: err.message || 'Falha ao consolidar as páginas do extrato em OFX.',
     });
   }
 });

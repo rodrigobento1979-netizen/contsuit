@@ -1,4 +1,4 @@
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 
 function getAiClient() {
   const key = process.env.GEMINI_API_KEY;
@@ -73,12 +73,12 @@ Retorne um JSON estrito no seguinte formato:
 }`;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.1-flash-lite',
         contents: userQuestion,
         config: {
+          thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
           systemInstruction,
           responseMimeType: 'application/json',
-          temperature: 0.2,
         },
       });
 

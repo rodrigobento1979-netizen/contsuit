@@ -1,4 +1,5 @@
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
+import { PDFDocument } from 'pdf-lib';
 import { BankTransaction } from './db.ts';
 
 function getAiClient() {
@@ -16,6 +17,38 @@ function getAiClient() {
   });
 }
 
+// Cooldown map (epoch ms) when a model hits 429 RESOURCE_EXHAUSTED
+const modelCooldownUntil: Record<string, number> = {};
+
+export function isGeminiQuotaError(err: any): boolean {
+  const msg = String(err?.message || err || '');
+  return (
+    err?.status === 429 ||
+    msg.includes('429') ||
+    msg.includes('RESOURCE_EXHAUSTED') ||
+    msg.toLowerCase().includes('quota')
+  );
+}
+
+function formatFriendlyGeminiError(err: any): Error & { status?: number } {
+  if (isGeminiQuotaError(err)) {
+    const friendly = new Error(
+      'Cota diária/por minuto gratuita da API Gemini atingida no momento. Aguarde alguns instantes ou vincule uma chave GEMINI_API_KEY com faturamento ativo nas variáveis de ambiente/Secrets do projeto.'
+    ) as Error & { status?: number };
+    friendly.status = 429;
+    return friendly;
+  }
+  const msg = String(err?.message || '');
+  if (err?.status === 403 || err?.status === 400 || msg.includes('PERMISSION_DENIED') || msg.includes('API_KEY_INVALID')) {
+    const friendly = new Error(
+      'Chave GEMINI_API_KEY inválida ou sem permissão. Verifique a variável de ambiente GEMINI_API_KEY nas configurações do projeto.'
+    ) as Error & { status?: number };
+    friendly.status = err?.status || 403;
+    return friendly;
+  }
+  return err instanceof Error ? err : new Error(msg || 'Falha ao consultar a IA.');
+}
+
 export interface StatementExtractionResult {
   bankName: string;
   bankCode: string;
@@ -28,6 +61,8 @@ export interface StatementExtractionResult {
   closingBalance: number;
   extractedCnpj?: string;
   extractedCompanyName?: string;
+  totalPages?: number;
+  pagesProcessed?: number;
   transactions: {
     date: string; // YYYY-MM-DD
     type: 'DEBIT' | 'CREDIT';
@@ -314,63 +349,135 @@ function parseStatementWithRegex(rawText: string, bankHint?: string): StatementE
 }
 
 /**
- * Usa Gemini AI (ou fallback determinístico de alta fidelidade) para extrair extrato
+ * Tenta recuperar JSON válido caso a resposta tenha sido cortada por limite de tokens no meio de transactions[]
  */
-export async function parseStatementWithAI(params: {
+function safeParseStatementJson(raw: string): { parsed: StatementExtractionResult; wasTruncated: boolean } {
+  const clean = (raw || '{}')
+    .replace(/^```json\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
+
+  try {
+    const parsed = JSON.parse(clean) as StatementExtractionResult;
+    if (!Array.isArray(parsed.transactions)) parsed.transactions = [];
+    return { parsed, wasTruncated: false };
+  } catch {
+    // Attempt recovery by truncating to the last complete transaction object inside "transactions"
+    const txIdx = clean.indexOf('"transactions"');
+    if (txIdx !== -1) {
+      const arrayStart = clean.indexOf('[', txIdx);
+      if (arrayStart !== -1) {
+        // Find last closing brace of a transaction item before truncation
+        const lastObjEnd = clean.lastIndexOf('}');
+        if (lastObjEnd > arrayStart) {
+          const prefix = clean.slice(0, lastObjEnd + 1);
+          const candidate = `${prefix}]}`;
+          try {
+            const recovered = JSON.parse(candidate) as StatementExtractionResult;
+            if (!Array.isArray(recovered.transactions)) recovered.transactions = [];
+            return { parsed: recovered, wasTruncated: true };
+          } catch {
+            // Try stepping back one object further
+            const prevObjEnd = clean.lastIndexOf('}', lastObjEnd - 1);
+            if (prevObjEnd > arrayStart) {
+              try {
+                const recovered2 = JSON.parse(`${clean.slice(0, prevObjEnd + 1)}]}`) as StatementExtractionResult;
+                if (!Array.isArray(recovered2.transactions)) recovered2.transactions = [];
+                return { parsed: recovered2, wasTruncated: true };
+              } catch {
+                // ignore
+              }
+            }
+          }
+        }
+      }
+    }
+    throw new Error('JSON retornado pela IA está incompleto ou inválido.');
+  }
+}
+
+/**
+ * Extrai um único bloco/chunk de extrato bancário (1 a 2 páginas PDF, imagem ou texto)
+ */
+export async function extractStatementChunkWithAI(params: {
   fileBase64?: string;
   mimeType?: string;
   rawText?: string;
   bankHint?: string;
-}): Promise<StatementExtractionResult> {
+  pageRangeLabel?: string;
+}): Promise<{ result: StatementExtractionResult; wasTruncated: boolean }> {
   const ai = getAiClient();
+  if (!ai) {
+    return {
+      result: parseStatementWithRegex(params.rawText || 'Extrato bancário padrão', params.bankHint),
+      wasTruncated: false,
+    };
+  }
 
-  // If AI client is configured with API key, call Gemini 3.8 Flash
-  if (ai) {
-    try {
-      const parts: any[] = [];
-      const promptText = `Você é um auditor contábil especialista em extratos bancários brasileiros (Itaú, Bradesco, Santander, Banco do Brasil, Caixa, Nubank, Inter, Sicredi, Sicoob, C6, etc.).
-Analise detalhadamente o extrato bancário fornecido (em imagem, PDF ou texto) e extraia com precisão absoluta todas as transações financeiras para posterior conversão em arquivo OFX bancário.
+  const parts: any[] = [];
+  const scopeNote = params.pageRangeLabel
+    ? `\nIMPORTANTE: Você está analisando especificamente ${params.pageRangeLabel} do extrato bancário. Extraia 100% de TODAS as linhas/lançamentos visíveis em TODAS as páginas deste trecho, do primeiro ao último item, sem pular, agrupar ou resumir nenhuma transação.`
+    : `\nIMPORTANTE: Extraia 100% de TODAS as transações presentes em TODAS as páginas fornecidas, linha por linha, do início ao fim, sem omitir ou resumir nenhum lançamento.`;
+
+  const promptText = `Você é um auditor contábil especialista em extratos bancários brasileiros (Itaú, Bradesco, Santander, Banco do Brasil, Caixa, Nubank, Inter, Sicredi, Sicoob, C6, BTG, Safra, etc.).
+Analise detalhadamente o extrato bancário fornecido (imagem, PDF ou texto) e extraia com precisão absoluta todas as transações financeiras para posterior conversão em arquivo OFX bancário.${scopeNote}
 
 Regras rígidas:
-1. Identifique o Nome do Banco e o Código do Banco Oficial (Ex: 001 para Banco do Brasil, 341 para Itaú, 237 para Bradesco, 033 para Santander, 104 para Caixa, 260 para Nubank, 077 para Inter, 756 para Sicoob, 748 para Sicredi, 336 para C6). Se não souber, use 000.
-2. Identifique a Agência e Número da Conta Bancária.
-3. Identifique o CNPJ do titular/empresa correntista (formato XX.XXX.XXX/XXXX-XX) e o Nome/Razão Social da Empresa, caso conste no cabeçalho ou dados da conta.
-4. Identifique o período do extrato (Data Inicial e Data Final no formato YYYY-MM-DD).
-5. Para cada transação listada no extrato:
-   - Data no formato estrito 'YYYY-MM-DD'.
-   - Tipo de transação: 'DEBIT' para saídas/pagamentos/tarifas; 'CREDIT' para entradas/recebimentos.
+1. Identifique o Nome do Banco e o Código do Banco Oficial (Ex: 001 para Banco do Brasil, 341 para Itaú, 237 para Bradesco, 033 para Santander, 104 para Caixa, 260 para Nubank, 077 para Inter, 756 para Sicoob, 748 para Sicredi, 336 para C6). Se não aparecer nesta página, use vazio "" ou "000".
+2. Identifique a Agência e Número da Conta Bancária se visíveis.
+3. Identifique o CNPJ do titular/empresa correntista (formato XX.XXX.XXX/XXXX-XX) e o Nome/Razão Social da Empresa se constarem.
+4. Identifique o período do trecho (Data Inicial e Data Final no formato YYYY-MM-DD).
+5. Para CADA transação listada nas tabelas/páginas (não ignore nenhuma linha de pagamento, PIX, TED, tarifa, rendimento, resgate/aplicação automática ou débito/crédito):
+   - Data no formato estrito 'YYYY-MM-DD'. (Se o extrato mostrar apenas DD/MM, utilize o ano do cabeçalho/período do extrato).
+   - Tipo de transação: 'DEBIT' para saídas/pagamentos/tarifas/envios/sinais negativos ou letra D; 'CREDIT' para entradas/recebimentos/depósitos/créditos ou letra C.
    - Valor numérico positivo (ex: 150.50).
-   - Descrição/Histórico (memo) legível e fiel ao extrato.
-   - FITID: um identificador único para a transação.
-6. Saldo inicial e Saldo final se constarem no extrato.`;
+   - Descrição/Histórico (memo) fiel e conciso (máximo 120 caracteres).
+   - Não inclua linhas de "Saldo do Dia", "Saldo Anterior" ou "Saldo Disponível" como transações, apenas movimentações reais.
+6. Saldo inicial e Saldo final se constarem claramente no trecho.`;
 
-      if (params.fileBase64 && params.mimeType) {
-        parts.push({
-          inlineData: {
-            mimeType: params.mimeType,
-            data: params.fileBase64,
-          },
-        });
-      }
+  if (params.fileBase64 && params.mimeType) {
+    parts.push({
+      inlineData: {
+        mimeType: params.mimeType,
+        data: params.fileBase64,
+      },
+    });
+  }
 
-      if (params.rawText) {
-        parts.push({
-          text: `Texto bruto do extrato:\n${params.rawText}`,
-        });
-      }
+  if (params.rawText) {
+    parts.push({
+      text: `Texto bruto do extrato:\n${params.rawText}`,
+    });
+  }
 
-      if (params.bankHint) {
-        parts.push({
-          text: `Dica de banco: ${params.bankHint}`,
-        });
-      }
+  if (params.bankHint) {
+    parts.push({
+      text: `Contexto / Referência do extrato: ${params.bankHint}`,
+    });
+  }
 
-      parts.push({ text: promptText });
+  parts.push({ text: promptText });
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+  const modelCandidates: { model: string; thinkingLevel: ThinkingLevel }[] = [
+    { model: 'gemini-3.1-flash-lite', thinkingLevel: ThinkingLevel.MINIMAL },
+    { model: 'gemini-4-hydrogen', thinkingLevel: ThinkingLevel.LOW },
+  ];
+
+  const now = Date.now();
+  const activeCandidates = modelCandidates.filter(c => (modelCooldownUntil[c.model] || 0) <= now);
+  const candidatesToTry = activeCandidates.length > 0 ? activeCandidates : modelCandidates;
+
+  let response: any = null;
+  let lastErr: any = null;
+
+  for (const candidate of candidatesToTry) {
+    try {
+      response = await ai.models.generateContent({
+        model: candidate.model,
         contents: { parts },
         config: {
+          thinkingConfig: { thinkingLevel: candidate.thinkingLevel },
+          maxOutputTokens: 65536,
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
@@ -395,31 +502,303 @@ Regras rígidas:
                     type: { type: Type.STRING, enum: ['DEBIT', 'CREDIT'] },
                     amount: { type: Type.NUMBER },
                     memo: { type: Type.STRING },
-                    fitid: { type: Type.STRING },
                   },
                   required: ['date', 'type', 'amount', 'memo'],
                 },
               },
             },
-            required: ['bankName', 'bankCode', 'startDate', 'endDate', 'transactions'],
+            required: ['startDate', 'endDate', 'transactions'],
           },
         },
       });
-
-      const text = (response.text ?? '{}').trim();
-      const parsed = JSON.parse(text) as StatementExtractionResult;
-      // If AI didn't catch CNPJ but rawText has it, backfill
-      if (!parsed.extractedCnpj && params.rawText) {
-        const cMatch = params.rawText.match(/([0-9]{2}\.[0-9]{3}\.[0-9]{3}\/[0-9]{4}-[0-9]{2})/);
-        if (cMatch) parsed.extractedCnpj = cMatch[1];
+      break;
+    } catch (err: any) {
+      lastErr = err;
+      if (isGeminiQuotaError(err)) {
+        // Put exhausted model on cooldown so subsequent chunks skip straight to the fallback model
+        modelCooldownUntil[candidate.model] = Date.now() + 10 * 60_000;
+        console.warn(`[OFX-AI] Modelo ${candidate.model} atingiu limite 429, alternando para próximo modelo...`);
+        continue;
       }
-      return parsed;
-    } catch (err) {
-      console.warn('Gemini API call failed, falling back to heuristic statement reader:', err);
+      console.warn(`[OFX-AI] Erro no modelo ${candidate.model}:`, err?.message || err);
     }
   }
 
-  // Resilient heuristic parser
+  if (!response) {
+    throw formatFriendlyGeminiError(lastErr);
+  }
+
+  const finishReason = response.candidates?.[0]?.finishReason;
+  const text = (response.text ?? '{}').trim();
+  const { parsed, wasTruncated } = safeParseStatementJson(text);
+
+  if (!parsed.extractedCnpj && params.rawText) {
+    const cMatch = params.rawText.match(/([0-9]{2}\.[0-9]{3}\.[0-9]{3}\/[0-9]{4}-[0-9]{2})/);
+    if (cMatch) parsed.extractedCnpj = cMatch[1];
+  }
+
+  return {
+    result: parsed,
+    wasTruncated: wasTruncated || finishReason === 'MAX_TOKENS',
+  };
+}
+
+/**
+ * Consolida múltiplos lotes extraídos de um extrato multipágina em um resultado único ordenado
+ */
+export function mergeExtractionResults(
+  chunks: StatementExtractionResult[],
+  totalPages?: number,
+  pagesProcessed?: number
+): StatementExtractionResult {
+  const validChunks = (chunks || []).filter(Boolean);
+  if (validChunks.length === 0) {
+    throw new Error('Nenhum dado extraído dos lotes do extrato.');
+  }
+
+  const pickBest = (values: (string | undefined)[], fallback: string, ignoreValues: string[] = []): string => {
+    for (const v of values) {
+      const trimmed = (v || '').trim();
+      if (trimmed && !ignoreValues.includes(trimmed.toLowerCase())) {
+        return trimmed;
+      }
+    }
+    return fallback;
+  };
+
+  const bankName = pickBest(
+    validChunks.map(c => c.bankName),
+    'Banco Comercial Brasileiro',
+    ['n/d', 'desconhecido', 'não identificado', 'banco']
+  );
+  const bankCode = pickBest(
+    validChunks.map(c => c.bankCode),
+    '001',
+    ['000', 'n/d', '']
+  );
+  const agency = pickBest(validChunks.map(c => c.agency), '0001', ['n/d', '0000']);
+  const accountNumber = pickBest(validChunks.map(c => c.accountNumber), '12345-6', ['n/d']);
+  const accountType = (validChunks.find(c => c.accountType)?.accountType || 'CHECKING') as
+    | 'CHECKING'
+    | 'SAVINGS'
+    | 'BUSINESS';
+  const extractedCnpj = pickBest(validChunks.map(c => c.extractedCnpj), '') || undefined;
+  const extractedCompanyName = pickBest(validChunks.map(c => c.extractedCompanyName), '') || undefined;
+
+  // Opening balance from first chunk that defines a numeric non-zero or explicit balance; closing from last
+  let openingBalance = 0;
+  for (const c of validChunks) {
+    if (typeof c.openingBalance === 'number' && !Number.isNaN(c.openingBalance) && c.openingBalance !== 0) {
+      openingBalance = c.openingBalance;
+      break;
+    }
+  }
+  let closingBalance = 0;
+  for (let i = validChunks.length - 1; i >= 0; i--) {
+    const c = validChunks[i];
+    if (typeof c.closingBalance === 'number' && !Number.isNaN(c.closingBalance) && c.closingBalance !== 0) {
+      closingBalance = c.closingBalance;
+      break;
+    }
+  }
+
+  // Merge all transactions in exact page order and normalize dates/amounts/FITIDs
+  const allTransactions: StatementExtractionResult['transactions'] = [];
+  const txDates: string[] = [];
+  const chunkDates: string[] = [];
+
+  for (const chunk of validChunks) {
+    if (chunk.startDate && /^\d{4}-\d{2}-\d{2}$/.test(chunk.startDate)) chunkDates.push(chunk.startDate);
+    if (chunk.endDate && /^\d{4}-\d{2}-\d{2}$/.test(chunk.endDate)) chunkDates.push(chunk.endDate);
+
+    for (const tx of chunk.transactions || []) {
+      const amount = Math.abs(Number(tx.amount) || 0);
+      if (amount <= 0) continue;
+      const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(tx.date || '')
+        ? tx.date
+        : chunk.startDate && /^\d{4}-\d{2}-\d{2}$/.test(chunk.startDate)
+        ? chunk.startDate
+        : new Date().toISOString().slice(0, 10);
+
+      txDates.push(dateStr);
+      const seq = allTransactions.length + 1;
+      allTransactions.push({
+        date: dateStr,
+        type: tx.type === 'CREDIT' ? 'CREDIT' : 'DEBIT',
+        amount: Number(amount.toFixed(2)),
+        memo: (tx.memo || 'LANCAMENTO BANCARIO').trim(),
+        fitid: `${dateStr.replace(/-/g, '')}${String(seq).padStart(5, '0')}`,
+      });
+    }
+  }
+
+  const datesForPeriod = txDates.length > 0 ? [...txDates] : [...chunkDates];
+  datesForPeriod.sort();
+  const startDate = datesForPeriod[0] || new Date().toISOString().slice(0, 10);
+  const endDate = datesForPeriod[datesForPeriod.length - 1] || startDate;
+
+  return {
+    bankName,
+    bankCode,
+    agency,
+    accountNumber,
+    accountType,
+    startDate,
+    endDate,
+    openingBalance,
+    closingBalance,
+    extractedCnpj,
+    extractedCompanyName,
+    totalPages: totalPages ?? validChunks.length,
+    pagesProcessed: pagesProcessed ?? totalPages ?? validChunks.length,
+    transactions: allTransactions,
+  };
+}
+
+/**
+ * Helper para criar sub-PDF com intervalo específico de páginas [startIdx..endIdx] (0-based)
+ */
+async function slicePdfPagesToBase64(srcPdf: PDFDocument, startIdx: number, endIdx: number): Promise<string> {
+  const subDoc = await PDFDocument.create();
+  const indices: number[] = [];
+  for (let i = startIdx; i <= endIdx; i++) indices.push(i);
+  const copied = await subDoc.copyPages(srcPdf, indices);
+  copied.forEach(p => subDoc.addPage(p));
+  const bytes = await subDoc.save();
+  return Buffer.from(bytes).toString('base64');
+}
+
+/**
+ * Processa um intervalo de páginas do PDF, subdividindo automaticamente para 1 página se houver truncamento
+ */
+async function processPdfPageBatchWithRetry(
+  srcPdf: PDFDocument,
+  startIdx: number,
+  endIdx: number,
+  totalPages: number,
+  bankHint?: string
+): Promise<StatementExtractionResult[]> {
+  const chunkBase64 = await slicePdfPagesToBase64(srcPdf, startIdx, endIdx);
+  const pageLabel =
+    startIdx === endIdx
+      ? `a página ${startIdx + 1} de ${totalPages}`
+      : `as páginas ${startIdx + 1} a ${endIdx + 1} de ${totalPages}`;
+
+  try {
+    const { result, wasTruncated } = await extractStatementChunkWithAI({
+      fileBase64: chunkBase64,
+      mimeType: 'application/pdf',
+      bankHint,
+      pageRangeLabel: pageLabel,
+    });
+
+    // If truncated and this batch had > 1 page, split page by page so zero transactions are lost!
+    if (wasTruncated && endIdx > startIdx) {
+      console.warn(`[OFX-AI] Lote (${pageLabel}) atingiu truncamento. Reprocessando página por página...`);
+      const singleResults: StatementExtractionResult[] = [];
+      for (let p = startIdx; p <= endIdx; p++) {
+        const res = await processPdfPageBatchWithRetry(srcPdf, p, p, totalPages, bankHint);
+        singleResults.push(...res);
+      }
+      return singleResults;
+    }
+
+    return [result];
+  } catch (err: any) {
+    // Do NOT multiply quota/auth errors by splitting into individual pages
+    if (isGeminiQuotaError(err) || err?.status === 429 || err?.status === 403 || err?.status === 400) {
+      throw formatFriendlyGeminiError(err);
+    }
+    if (endIdx > startIdx) {
+      console.warn(`[OFX-AI] Falha no lote (${pageLabel}), dividindo página por página...`, err);
+      const singleResults: StatementExtractionResult[] = [];
+      for (let p = startIdx; p <= endIdx; p++) {
+        const res = await processPdfPageBatchWithRetry(srcPdf, p, p, totalPages, bankHint);
+        singleResults.push(...res);
+      }
+      return singleResults;
+    }
+    throw formatFriendlyGeminiError(err);
+  }
+}
+
+/**
+ * Usa Gemini AI (com fatiamento automático multipágina para PDFs longos) ou fallback determinístico para extrair extrato
+ */
+export async function parseStatementWithAI(params: {
+  fileBase64?: string;
+  mimeType?: string;
+  rawText?: string;
+  bankHint?: string;
+}): Promise<StatementExtractionResult> {
+  const ai = getAiClient();
+
+  if (ai) {
+    // 1. Multi-page PDF handling with automatic 2-page batching
+    if (params.fileBase64 && params.mimeType === 'application/pdf') {
+      try {
+        const pdfBytes = Buffer.from(params.fileBase64, 'base64');
+        const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+        const totalPages = pdfDoc.getPageCount();
+        console.log(`[OFX-AI] PDF recebido com ${totalPages} página(s).`);
+
+        if (totalPages > 4) {
+          const BATCH_SIZE = 4;
+          const ranges: { start: number; end: number }[] = [];
+          for (let i = 0; i < totalPages; i += BATCH_SIZE) {
+            ranges.push({ start: i, end: Math.min(i + BATCH_SIZE - 1, totalPages - 1) });
+          }
+
+          // Process batches with concurrency = 2 to keep speed high without hitting rate limits
+          const CONCURRENCY = 2;
+          const orderedResults: StatementExtractionResult[][] = new Array(ranges.length);
+
+          for (let i = 0; i < ranges.length; i += CONCURRENCY) {
+            const slice = ranges.slice(i, i + CONCURRENCY);
+            const settled = await Promise.all(
+              slice.map((r, offset) =>
+                processPdfPageBatchWithRetry(pdfDoc, r.start, r.end, totalPages, params.bankHint).then(res => ({
+                  idx: i + offset,
+                  res,
+                }))
+              )
+            );
+            for (const item of settled) {
+              orderedResults[item.idx] = item.res;
+            }
+          }
+
+          const flatChunks = orderedResults.flat();
+          return mergeExtractionResults(flatChunks, totalPages, totalPages);
+        }
+
+        // PDF with 1 to 4 pages: single call (auto-subdivides only if output truncates)
+        const batchResults = await processPdfPageBatchWithRetry(pdfDoc, 0, totalPages - 1, totalPages, params.bankHint);
+        return mergeExtractionResults(batchResults, totalPages, totalPages);
+      } catch (err: any) {
+        console.error('[OFX-AI] Erro ao processar PDF multipágina com IA:', err);
+        throw formatFriendlyGeminiError(err);
+      }
+    }
+
+    // 2. Single image or text statement
+    try {
+      const { result } = await extractStatementChunkWithAI({
+        fileBase64: params.fileBase64,
+        mimeType: params.mimeType,
+        rawText: params.rawText,
+        bankHint: params.bankHint,
+      });
+      return mergeExtractionResults([result], 1, 1);
+    } catch (err: any) {
+      console.warn('Gemini API call failed, checking fallback:', err);
+      if (params.fileBase64 && !params.rawText) {
+        throw formatFriendlyGeminiError(err);
+      }
+    }
+  }
+
+  // Resilient heuristic parser (only for plain text or when no API key is configured)
   return parseStatementWithRegex(params.rawText || 'Extrato bancário padrão', params.bankHint);
 }
 
@@ -443,9 +822,10 @@ Determine:
 6. Parecer contábil explicativo resumido em 2 frases.`;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+        model: 'gemini-3.1-flash-lite',
         contents: prompt,
         config: {
+          thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,

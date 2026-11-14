@@ -172,6 +172,8 @@ export interface ConvertedStatement {
   extractedCompanyName?: string;
   fileBase64?: string;
   fileMimeType?: string;
+  totalPages?: number;
+  pagesProcessed?: number;
 }
 
 export interface FeeContract {
