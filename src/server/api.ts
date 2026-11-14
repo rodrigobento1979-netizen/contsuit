@@ -3,6 +3,7 @@ import {
   getCompanies,
   getCompanyById,
   createCompany,
+  updateCompany,
   getUsers,
   getUserById,
   getUserByEmail,
@@ -659,6 +660,19 @@ apiRouter.post('/companies', (req: Request, res: Response) => {
   }
 });
 
+apiRouter.put('/companies/:id', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const updated = updateCompany(id, req.body);
+    if (!updated) {
+      return res.status(404).json({ error: 'Empresa não encontrada.' });
+    }
+    return res.json(updated);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ---------------------------------------------------------
 // ASSETS (ATIVO PERMANENTE / IMOBILIZADO)
 // ---------------------------------------------------------
@@ -996,6 +1010,27 @@ apiRouter.post('/ofx/finalize', async (req: Request, res: Response) => {
         fileMimeType: mimeType || 'application/pdf',
         ...convertedRecord,
       });
+
+      // Disparar notificação por e-mail para contsuitesistemas@gmail.com
+      const compObj = getCompanyById(companyId);
+      void sendEmail({
+        to: 'contsuitesistemas@gmail.com',
+        subject: `[ContSuite] Novo Extrato Importado - ${compObj?.fantasyName || compObj?.name || companyId}`,
+        html: `
+          <div style="font-family: Arial, sans-serif; color: #1e293b; max-width: 550px; margin: 0 auto; border: 1px solid #14b8a6; border-radius: 12px; padding: 24px; background: #ffffff;">
+            <h2 style="color: #004d40; margin-top: 0;">Novo Extrato Bancário Importado</h2>
+            <p>Um novo extrato foi convertido e importado no ContSuite:</p>
+            <ul>
+              <li><strong>Empresa:</strong> ${compObj?.fantasyName || compObj?.name || companyId} (CNPJ: ${compObj?.cnpj || '—'})</li>
+              <li><strong>Banco:</strong> ${convertedRecord.bankName} (Ag: ${convertedRecord.agency} CC: ${convertedRecord.accountNumber})</li>
+              <li><strong>Período:</strong> ${convertedRecord.startDate} a ${convertedRecord.endDate}</li>
+              <li><strong>Lançamentos:</strong> ${convertedRecord.transactionsCount} transações processadas</li>
+              <li><strong>Arquivo:</strong> ${fileName || 'extrato_multipagina.pdf'}</li>
+            </ul>
+            <p style="font-size: 11px; color: #64748b; margin-top: 20px;">Notificação automática enviada pelo ContSuite Contábil.</p>
+          </div>
+        `,
+      }).catch(e => console.warn('Failed to send notification email for statement:', e));
     }
 
     return res.json({
@@ -1385,6 +1420,30 @@ apiRouter.post('/documents', async (req: Request, res: Response) => {
     });
 
     const { fileBase64: savedB64, ...meta } = created;
+
+    // Disparar notificação por e-mail para contsuitesistemas@gmail.com
+    const compObj = getCompanyById(companyId);
+    void sendEmail({
+      to: 'contsuitesistemas@gmail.com',
+      subject: `[ContSuite] Novo Arquivo Postado - ${compObj?.fantasyName || compObj?.name || companyId}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; color: #1e293b; max-width: 550px; margin: 0 auto; border: 1px solid #14b8a6; border-radius: 12px; padding: 24px; background: #ffffff;">
+          <h2 style="color: #004d40; margin-top: 0;">Novo Documento Postado</h2>
+          <p>Um novo arquivo foi postado e classificado no módulo Arquivos:</p>
+          <ul>
+            <li><strong>Empresa:</strong> ${compObj?.fantasyName || compObj?.name || companyId} (CNPJ: ${compObj?.cnpj || '—'})</li>
+            <li><strong>Arquivo:</strong> ${created.fileName}</li>
+            <li><strong>Categoria:</strong> ${created.category.toUpperCase()}</li>
+            <li><strong>Competência:</strong> ${created.competenceMonth}</li>
+            <li><strong>Status:</strong> ${created.status.toUpperCase()}</li>
+            ${created.amount ? `<li><strong>Valor:</strong> R$ ${created.amount.toFixed(2)}</li>` : ''}
+            <li><strong>Enviado por:</strong> ${created.uploadedBy || 'Sistema'}</li>
+          </ul>
+          <p style="font-size: 11px; color: #64748b; margin-top: 20px;">Notificação automática enviada pelo ContSuite Contábil.</p>
+        </div>
+      `,
+    }).catch(e => console.warn('Failed to send notification email for document:', e));
+
     return res.json({
       ...meta,
       hasOriginalFile: Boolean(savedB64),

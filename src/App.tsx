@@ -83,6 +83,7 @@ export default function App() {
   const [assetToEdit, setAssetToEdit] = useState<Asset | null>(null);
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
   const [isCompanyModalOpen, setIsCompanyModalOpen] = useState(false);
+  const [companyToEdit, setCompanyToEdit] = useState<Company | null>(null);
   const [companyPrefill, setCompanyPrefill] = useState<{ name?: string; cnpj?: string; fantasyName?: string } | null>(null);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [pendingOfxFile, setPendingOfxFile] = useState<File | null>(null);
@@ -699,28 +700,52 @@ export default function App() {
     }
   };
 
-  // Save new company (explicitly bound to the master user)
+  // Save or update company
   const handleSaveCompany = async (companyData: Partial<Company>) => {
-    const res = await fetch('/api/companies', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...companyData,
-        adminEmail: currentUser.email || 'rodrigobento1979@gmail.com',
-        adminName: currentUser.name || 'Rodrigo Bento',
-      }),
-    });
-    if (!res.ok) throw new Error('Falha ao cadastrar empresa');
-    const newComp = await res.json();
-    await fetchCompaniesAndUsers();
-    setCurrentCompany(newComp);
+    if (companyToEdit) {
+      const res = await fetch(`/api/companies/${companyToEdit.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...companyData,
+          adminEmail: currentUser.email || 'rodrigobento1979@gmail.com',
+          adminName: currentUser.name || 'Rodrigo Bento',
+        }),
+      });
+      if (!res.ok) throw new Error('Falha ao atualizar empresa');
+      const updatedComp = await res.json();
+      await fetchCompaniesAndUsers();
+      if (currentCompany.id === updatedComp.id) {
+        setCurrentCompany(updatedComp);
+      }
+      try {
+        await saveCompanyToFirestore(updatedComp);
+      } catch (e) {
+        console.warn('Firestore update company warning:', e);
+      }
+      showToast(`Empresa "${updatedComp.fantasyName || updatedComp.name}" atualizada com sucesso!`);
+    } else {
+      const res = await fetch('/api/companies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...companyData,
+          adminEmail: currentUser.email || 'rodrigobento1979@gmail.com',
+          adminName: currentUser.name || 'Rodrigo Bento',
+        }),
+      });
+      if (!res.ok) throw new Error('Falha ao cadastrar empresa');
+      const newComp = await res.json();
+      await fetchCompaniesAndUsers();
+      setCurrentCompany(newComp);
 
-    try {
-      await saveCompanyToFirestore(newComp);
-    } catch (e) {
-      console.warn('Firestore save company warning:', e);
+      try {
+        await saveCompanyToFirestore(newComp);
+      } catch (e) {
+        console.warn('Firestore save company warning:', e);
+      }
+      showToast(`Empresa "${newComp.fantasyName || newComp.name}" cadastrada com sucesso!`);
     }
-    showToast(`Empresa "${newComp.fantasyName || newComp.name}" cadastrada com sucesso!`);
   };
 
   // If not logged in, render the clean Login Screen first
@@ -835,7 +860,16 @@ export default function App() {
                   allCompanies={allCompanies}
                   currentUser={currentUser}
                   onSelectCompany={(comp) => handleSwitchCompany(comp.id)}
-                  onOpenNewCompanyModal={() => setIsCompanyModalOpen(true)}
+                  onOpenNewCompanyModal={() => {
+                    setCompanyToEdit(null);
+                    setCompanyPrefill(null);
+                    setIsCompanyModalOpen(true);
+                  }}
+                  onEditCompany={(comp) => {
+                    setCompanyToEdit(comp);
+                    setCompanyPrefill(null);
+                    setIsCompanyModalOpen(true);
+                  }}
                 />
               )}
 
@@ -970,13 +1004,16 @@ export default function App() {
         onClose={() => {
           setIsCompanyModalOpen(false);
           setCompanyPrefill(null);
+          setCompanyToEdit(null);
         }}
         onSave={async (data) => {
           await handleSaveCompany(data);
           setCompanyPrefill(null);
+          setCompanyToEdit(null);
         }}
         adminEmail={currentUser.email}
         prefillData={companyPrefill}
+        companyToEdit={companyToEdit}
       />
     </div>
   );

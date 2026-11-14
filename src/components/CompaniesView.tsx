@@ -20,6 +20,7 @@ interface CompaniesViewProps {
   currentUser: User;
   onSelectCompany: (company: Company) => void;
   onOpenNewCompanyModal: () => void;
+  onEditCompany: (company: Company) => void;
 }
 
 export const CompaniesView: React.FC<CompaniesViewProps> = ({
@@ -28,6 +29,7 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
   currentUser,
   onSelectCompany,
   onOpenNewCompanyModal,
+  onEditCompany,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [showReportModal, setShowReportModal] = useState(false);
@@ -199,19 +201,28 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
                     </td>
 
                     <td className="py-3 px-3 sm:px-4 text-right whitespace-nowrap">
-                      {isActive ? (
-                        <span className="text-[11px] font-semibold text-teal-700">
-                          Selecionada
-                        </span>
-                      ) : (
+                      <div className="inline-flex items-center gap-1.5 justify-end">
                         <button
-                          onClick={() => onSelectCompany(comp)}
-                          className="px-3 py-1 rounded-xl bg-teal-50 hover:bg-teal-600 text-teal-800 hover:text-white border border-teal-200 text-xs font-bold transition flex items-center gap-1 ml-auto cursor-pointer"
+                          onClick={() => onEditCompany(comp)}
+                          className="px-2.5 py-1 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"
+                          title="Editar cadastro e e-mail de contato"
                         >
-                          <span>Alternar</span>
-                          <ArrowRight className="w-3 h-3" />
+                          Editar
                         </button>
-                      )}
+                        {isActive ? (
+                          <span className="text-[11px] font-semibold text-teal-700 px-2">
+                            Selecionada
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => onSelectCompany(comp)}
+                            className="px-3 py-1 rounded-xl bg-teal-50 hover:bg-teal-600 text-teal-800 hover:text-white border border-teal-200 text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                          >
+                            <span>Alternar</span>
+                            <ArrowRight className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );

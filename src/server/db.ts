@@ -327,6 +327,22 @@ export function createCompany(company: Omit<Company, 'id' | 'createdAt'>) {
   return newCompany;
 }
 
+export function updateCompany(id: string, updates: Partial<Company>) {
+  const db = loadDb();
+  const idx = db.companies.findIndex(c => c.id === id);
+  if (idx !== -1) {
+    db.companies[idx] = {
+      ...db.companies[idx],
+      ...updates,
+      id: db.companies[idx].id,
+      createdAt: db.companies[idx].createdAt,
+    };
+    saveDb(db);
+    return db.companies[idx];
+  }
+  return null;
+}
+
 export function getUsers() {
   return loadDb().users;
 }
