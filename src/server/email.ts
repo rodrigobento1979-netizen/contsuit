@@ -122,9 +122,14 @@ export async function testSmtpConnection(config: SmtpConfig, testRecipient: stri
     };
   } catch (err: any) {
     console.error('SMTP test error:', err);
+    const rawMsg = String(err?.message || '');
+    let friendly = rawMsg || 'Falha ao conectar com o servidor SMTP. Verifique o host, porta e credenciais.';
+    if (rawMsg.includes('535') || rawMsg.includes('BadCredentials') || rawMsg.includes('Username and Password not accepted')) {
+      friendly = `Google recusou o usuário (${config.user}) ou a Senha de App (535 BadCredentials). Confirme se: 1) A Senha de App foi criada logado exatamente na conta ${config.user} (e não em outro Gmail aberto no navegador); 2) A Verificação em duas etapas está ativa nessa conta; 3) Não há erro de digitação nem espaços extras; 4) Há algum alerta de segurança bloqueando o acesso na caixa de entrada de ${config.user}.`;
+    }
     return {
       success: false,
-      message: err.message || 'Falha ao conectar com o servidor SMTP. Verifique o host, porta e credenciais.',
+      message: friendly,
     };
   }
 }

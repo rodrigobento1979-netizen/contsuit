@@ -562,12 +562,18 @@ apiRouter.post('/email/settings', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Host SMTP, Usuário/E-mail e Senha de Aplicativo são obrigatórios.' });
     }
 
+    const cleanHost = host.trim();
+    const numericPort = Number(port) || 587;
+    const cleanPass = cleanHost.toLowerCase().includes('gmail')
+      ? pass.replace(/\s+/g, '')
+      : pass.trim();
+
     const cfg: SmtpConfig = {
-      host: host.trim(),
-      port: Number(port) || 587,
-      secure: Boolean(secure),
+      host: cleanHost,
+      port: numericPort,
+      secure: numericPort === 465 ? true : Boolean(secure),
       user: user.trim(),
-      pass: pass.trim(),
+      pass: cleanPass,
       fromName: fromName?.trim() || 'ContSuite Contábil',
       fromEmail: fromEmail?.trim() || user.trim(),
     };
@@ -577,6 +583,12 @@ apiRouter.post('/email/settings', async (req: Request, res: Response) => {
     let testResult: any = null;
     if (testNow) {
       testResult = await testSmtpConnection(cfg, 'rodrigobento1979@gmail.com');
+      if (!testResult.success) {
+        return res.status(400).json({
+          error: testResult.message || 'Falha ao validar conexão SMTP.',
+          testResult,
+        });
+      }
     }
 
     return res.json({

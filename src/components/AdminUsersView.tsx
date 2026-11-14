@@ -22,7 +22,8 @@ import {
   Trash2,
   ExternalLink,
   ChevronRight,
-  Settings
+  Settings,
+  HelpCircle
 } from 'lucide-react';
 import { User, Company } from '../types';
 
@@ -89,6 +90,7 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
   const [smtpConfigured, setSmtpConfigured] = useState(false);
   const [smtpSaving, setSmtpSaving] = useState(false);
   const [smtpStatusMessage, setSmtpStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [showSmtpHelpModal, setShowSmtpHelpModal] = useState(false);
 
   useEffect(() => {
     fetch('/api/email/settings')
@@ -1233,15 +1235,27 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                   <p className="text-xs text-slate-500">Envio automático pela nuvem com template ContSuite</p>
                 </div>
               </div>
-              <button
-                onClick={() => {
-                  setShowSmtpModal(false);
-                  setSmtpStatusMessage(null);
-                }}
-                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setShowSmtpHelpModal(true)}
+                  title="Como configurar"
+                  aria-label="Como configurar"
+                  className="p-1.5 rounded-full text-teal-700 bg-teal-50 hover:bg-teal-100 border border-teal-200 transition cursor-pointer"
+                >
+                  <HelpCircle className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => {
+                    setShowSmtpModal(false);
+                    setSmtpStatusMessage(null);
+                    setShowSmtpHelpModal(false);
+                  }}
+                  className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             {/* Presets */}
@@ -1409,6 +1423,158 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                   <span>{smtpSaving ? 'Testando Conexão...' : 'Testar & Salvar'}</span>
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: GUIA PASSO A PASSO DE CONFIGURAÇÃO DE E-MAIL (SMTP) */}
+      {showSmtpHelpModal && (
+        <div
+          className="fixed inset-0 z-[60] bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => setShowSmtpHelpModal(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white rounded-2xl max-w-xl w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-200"
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-teal-50 text-teal-700 border border-teal-200">
+                  <HelpCircle className="w-5 h-5 text-[#00897b]" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">Como configurar o envio de e-mail</h3>
+                  <p className="text-xs text-slate-500">Passo a passo e atalhos diretos para gerar a Senha de App</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSmtpHelpModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Gmail Section */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <h4 className="font-bold text-slate-900 text-xs">1. Gmail (Passo a passo recomendado)</h4>
+                <span className="text-[11px] font-mono text-teal-700 font-semibold">smtp.gmail.com · Porta 587</span>
+              </div>
+
+              <ol className="space-y-2 text-slate-700 list-decimal list-inside leading-relaxed">
+                <li>
+                  Acesse a conta Google exata que fará os disparos (dica: abra uma <strong>aba anônima</strong> se tiver mais de um Gmail conectado, para não gerar a senha na conta errada).
+                </li>
+                <li>
+                  Em <strong>Segurança</strong>, confirme que a <strong>Verificação em duas etapas</strong> está ativada.
+                </li>
+                <li>
+                  Acesse <strong>Senhas de app</strong>, dê um nome (ex: <code className="font-mono bg-white px-1 py-0.5 rounded border border-slate-200">ContSuite</code>) e gere o código de <strong>16 caracteres</strong>.
+                </li>
+                <li>
+                  No formulário anterior, informe o e-mail completo no campo <strong>Usuário</strong>, cole os 16 caracteres em <strong>Senha de Aplicativo</strong> e clique em <strong>Testar &amp; Salvar</strong>.
+                </li>
+                <li>
+                  Se aparecer erro <code className="font-mono bg-white px-1 py-0.5 rounded border border-slate-200">535 BadCredentials</code>, confira se a Senha de App foi criada na mesma conta do campo Usuário e clique abaixo em <strong>Liberar acesso em nuvem</strong> caso o Google tenha bloqueado o primeiro login do servidor.
+                </li>
+              </ol>
+
+              <div className="pt-2 flex flex-wrap gap-2">
+                <a
+                  href="https://myaccount.google.com/apppasswords"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-2 rounded-lg bg-[#00897b] hover:bg-[#00796b] text-white font-semibold text-xs inline-flex items-center gap-1.5 transition"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Ir direto para Senhas de App (Google)</span>
+                </a>
+                <a
+                  href="https://myaccount.google.com/security"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-2 rounded-lg bg-white hover:bg-slate-100 text-slate-800 border border-slate-200 font-semibold text-xs inline-flex items-center gap-1.5 transition"
+                >
+                  <ExternalLink className="w-3.5 h-3.5 text-teal-700" />
+                  <span>Segurança / 2FA (Google)</span>
+                </a>
+                <a
+                  href="https://accounts.google.com/DisplayUnlockCaptcha"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-2 rounded-lg bg-white hover:bg-slate-100 text-slate-800 border border-slate-200 font-semibold text-xs inline-flex items-center gap-1.5 transition"
+                >
+                  <ExternalLink className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Liberar Acesso em Nuvem</span>
+                </a>
+              </div>
+            </div>
+
+            {/* Other Providers */}
+            <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2.5 text-xs">
+              <h4 className="font-bold text-slate-900 text-xs">2. Outros Provedores (Outlook, Resend e SendGrid)</h4>
+              <div className="space-y-2 text-slate-600">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-100">
+                  <div>
+                    <p className="font-semibold text-slate-800">Outlook / Microsoft 365</p>
+                    <p className="text-[11px]">Host <code className="font-mono">smtp.office365.com</code> · Porta <code className="font-mono">587</code> · Use seu e-mail e Senha de App Microsoft.</p>
+                  </div>
+                  <a
+                    href="https://account.live.com/proofs/manage/additional"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-[11px] inline-flex items-center gap-1 shrink-0 whitespace-nowrap"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    <span>Abrir Microsoft</span>
+                  </a>
+                </div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-100">
+                  <div>
+                    <p className="font-semibold text-slate-800">Resend</p>
+                    <p className="text-[11px]">Host <code className="font-mono">smtp.resend.com</code> · Porta <code className="font-mono">587</code> · Usuário: <code className="font-mono">resend</code> · Senha: API Key.</p>
+                  </div>
+                  <a
+                    href="https://resend.com/api-keys"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-[11px] inline-flex items-center gap-1 shrink-0 whitespace-nowrap"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    <span>Abrir Resend</span>
+                  </a>
+                </div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <p className="font-semibold text-slate-800">SendGrid</p>
+                    <p className="text-[11px]">Host <code className="font-mono">smtp.sendgrid.net</code> · Porta <code className="font-mono">587</code> · Usuário: <code className="font-mono">apikey</code> · Senha: API Key.</p>
+                  </div>
+                  <a
+                    href="https://app.sendgrid.com/settings/api_keys"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-[11px] inline-flex items-center gap-1 shrink-0 whitespace-nowrap"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    <span>Abrir SendGrid</span>
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-2 flex justify-end border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowSmtpHelpModal(false)}
+                className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold cursor-pointer"
+              >
+                Entendi, voltar para configuração
+              </button>
             </div>
           </div>
         </div>
