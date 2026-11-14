@@ -94,6 +94,7 @@ export interface ConvertedStatement {
   ofxContent: string;
   fileBase64?: string;
   fileMimeType?: string;
+  hasOriginalFile?: boolean;
   totalPages?: number;
   pagesProcessed?: number;
 }

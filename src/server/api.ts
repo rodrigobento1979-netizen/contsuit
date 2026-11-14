@@ -60,9 +60,14 @@ import {
 
 export const apiRouter = express.Router();
 
-// Stream-safe body parser compatible with both Vite Connect and standalone Express
+// Stream-safe body parser compatible with both Vite Connect, Vercel Serverless, and standalone Express
 apiRouter.use((req: any, res: any, next: any) => {
-  if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
+  if (
+    req._body ||
+    req.readableEnded ||
+    (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0)
+  ) {
+    if (!req.body) req.body = {};
     return next();
   }
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
@@ -969,7 +974,7 @@ apiRouter.post('/ofx/finalize', async (req: Request, res: Response) => {
       savedStatement = saveStatement({
         companyId,
         originalFileName: fileName || 'extrato_multipagina.pdf',
-        fileBase64: fileBase64 && fileBase64.length < 3_500_000 ? fileBase64 : undefined,
+        fileBase64: fileBase64 && fileBase64.length < 1_800_000 ? fileBase64 : undefined,
         fileMimeType: mimeType || 'application/pdf',
         ...convertedRecord,
       });
@@ -1001,11 +1006,14 @@ apiRouter.post('/ofx/generate', (req: Request, res: Response) => {
   }
 });
 
-// List converted statements history for company
+// List converted statements history for company (omits heavy fileBase64 to stay well below Vercel 4.5MB response limit)
 apiRouter.get('/ofx/history', (req: Request, res: Response) => {
   try {
     const { companyId } = req.query;
-    const list = getStatements(companyId as string);
+    const list = getStatements(companyId as string).map(({ fileBase64, ...rest }) => ({
+      ...rest,
+      hasOriginalFile: Boolean(fileBase64),
+    }));
     return res.json(list);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });

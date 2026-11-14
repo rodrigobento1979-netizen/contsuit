@@ -172,6 +172,7 @@ export interface ConvertedStatement {
   extractedCompanyName?: string;
   fileBase64?: string;
   fileMimeType?: string;
+  hasOriginalFile?: boolean;
   totalPages?: number;
   pagesProcessed?: number;
 }

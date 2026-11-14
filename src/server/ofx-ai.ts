@@ -435,18 +435,40 @@ Regras rígidas:
    - Não inclua linhas de "Saldo do Dia", "Saldo Anterior" ou "Saldo Disponível" como transações, apenas movimentações reais.
 6. Saldo inicial e Saldo final se constarem claramente no trecho.`;
 
-  if (params.fileBase64 && params.mimeType) {
+  let effectiveRawText = params.rawText || '';
+  let effectiveBase64 = params.fileBase64;
+  let effectiveMime = (params.mimeType || '').toLowerCase().trim();
+  if (effectiveMime === 'image/jpg') {
+    effectiveMime = 'image/jpeg';
+  }
+
+  // Decode text/OFX/octet-stream base64 payloads into rawText instead of sending unsupported MIME types to inlineData
+  if (
+    effectiveBase64 &&
+    (effectiveMime.startsWith('text/') ||
+      effectiveMime === 'application/octet-stream' ||
+      effectiveMime === 'application/x-ofx')
+  ) {
+    try {
+      const decoded = Buffer.from(effectiveBase64, 'base64').toString('utf-8');
+      effectiveRawText = effectiveRawText ? `${effectiveRawText}\n${decoded}` : decoded;
+      effectiveBase64 = undefined;
+      effectiveMime = '';
+    } catch {}
+  }
+
+  if (effectiveBase64 && effectiveMime) {
     parts.push({
       inlineData: {
-        mimeType: params.mimeType,
-        data: params.fileBase64,
+        mimeType: effectiveMime,
+        data: effectiveBase64,
       },
     });
   }
 
-  if (params.rawText) {
+  if (effectiveRawText) {
     parts.push({
-      text: `Texto bruto do extrato:\n${params.rawText}`,
+      text: `Texto bruto do extrato:\n${effectiveRawText}`,
     });
   }
 
@@ -515,10 +537,64 @@ Regras rígidas:
     } catch (err: any) {
       lastErr = err;
       if (isGeminiQuotaError(err)) {
-        // Put exhausted model on cooldown so subsequent chunks skip straight to the fallback model
-        modelCooldownUntil[candidate.model] = Date.now() + 10 * 60_000;
-        console.warn(`[OFX-AI] Modelo ${candidate.model} atingiu limite 429, alternando para próximo modelo...`);
-        continue;
+        const errMsg = String(err?.message || '').toLowerCase();
+        const isPerDayLimit = errMsg.includes('perday') || errMsg.includes('per day') || errMsg.includes('daily');
+        if (isPerDayLimit) {
+          modelCooldownUntil[candidate.model] = Date.now() + 10 * 60_000;
+          console.warn(`[OFX-AI] Modelo ${candidate.model} atingiu cota diária (429), alternando para próximo modelo...`);
+          continue;
+        }
+        // Per-minute RPM throttling: brief pause and retry once before switching
+        console.warn(`[OFX-AI] Modelo ${candidate.model} atingiu limite por minuto (429), aguardando 2.5s...`);
+        await new Promise(r => setTimeout(r, 2500));
+        try {
+          response = await ai.models.generateContent({
+            model: candidate.model,
+            contents: { parts },
+            config: {
+              thinkingConfig: { thinkingLevel: candidate.thinkingLevel },
+              maxOutputTokens: 65536,
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  bankName: { type: Type.STRING },
+                  bankCode: { type: Type.STRING },
+                  agency: { type: Type.STRING },
+                  accountNumber: { type: Type.STRING },
+                  accountType: { type: Type.STRING, enum: ['CHECKING', 'SAVINGS', 'BUSINESS'] },
+                  extractedCnpj: { type: Type.STRING },
+                  extractedCompanyName: { type: Type.STRING },
+                  startDate: { type: Type.STRING },
+                  endDate: { type: Type.STRING },
+                  openingBalance: { type: Type.NUMBER },
+                  closingBalance: { type: Type.NUMBER },
+                  transactions: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        date: { type: Type.STRING },
+                        type: { type: Type.STRING, enum: ['DEBIT', 'CREDIT'] },
+                        amount: { type: Type.NUMBER },
+                        memo: { type: Type.STRING },
+                      },
+                      required: ['date', 'type', 'amount', 'memo'],
+                    },
+                  },
+                },
+                required: ['startDate', 'endDate', 'transactions'],
+              },
+            },
+          });
+          break;
+        } catch (retryErr: any) {
+          lastErr = retryErr;
+          if (isGeminiQuotaError(retryErr)) {
+            modelCooldownUntil[candidate.model] = Date.now() + 60_000;
+          }
+          continue;
+        }
       }
       console.warn(`[OFX-AI] Erro no modelo ${candidate.model}:`, err?.message || err);
     }

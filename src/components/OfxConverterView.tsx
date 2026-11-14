@@ -142,6 +142,30 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
     }
   }, [previewStatement]);
 
+  // Lazy-load original fileBase64 if omitted from lightweight /api/ofx/history list
+  useEffect(() => {
+    if (
+      previewTab === 'document' &&
+      previewStatement &&
+      !previewStatement.fileBase64 &&
+      previewStatement.hasOriginalFile &&
+      previewStatement.id
+    ) {
+      let cancelled = false;
+      fetch(`/api/ofx/statements/${previewStatement.id}`)
+        .then(r => (r.ok ? r.json() : null))
+        .then(full => {
+          if (!cancelled && full?.fileBase64) {
+            setPreviewStatement(prev => (prev && prev.id === full.id ? { ...prev, fileBase64: full.fileBase64 } : prev));
+          }
+        })
+        .catch(() => {});
+      return () => {
+        cancelled = true;
+      };
+    }
+  }, [previewTab, previewStatement]);
+
   // Robust transactions array for the preview modal (with automatic fallback to OFX parser)
   const previewTransactions = useMemo(() => {
     if (!previewStatement) return [];
@@ -296,7 +320,50 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
     return btoa(binary);
   };
 
-  // Convert with AI (automatic multi-page chunking for >2 page PDFs)
+  // Helper: Safe JSON parser that handles Vercel HTML/text error responses (413, 502, 504, 500) cleanly
+  const parseSafeJson = async (res: Response): Promise<any> => {
+    const rawText = await res.text();
+    try {
+      return rawText ? JSON.parse(rawText) : {};
+    } catch {
+      if (res.status === 413) {
+        throw new Error('O bloco de páginas/arquivo excedeu o limite de envio (4,5 MB). Tente um arquivo menor.');
+      }
+      if (res.status === 504 || res.status === 502) {
+        throw new Error('O servidor demorou para responder (Timeout). Tente processar novamente em instantes.');
+      }
+      throw new Error(`Erro no servidor (${res.status}): ${rawText.slice(0, 140) || 'Resposta inválida.'}`);
+    }
+  };
+
+  // Helper: Compress large photos/images so they stay well below Vercel's 4.5MB limit
+  const compressImageIfNeeded = async (b64: string, mime: string): Promise<{ base64: string; mimeType: string }> => {
+    if (!mime.startsWith('image/') || b64.length < 1_400_000) {
+      return { base64: b64, mimeType: mime === 'image/jpg' ? 'image/jpeg' : mime };
+    }
+    try {
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error('Falha ao carregar imagem para otimização'));
+        img.src = `data:${mime};base64,${b64}`;
+      });
+      const maxDim = 1800;
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(img.width * scale));
+      canvas.height = Math.max(1, Math.round(img.height * scale));
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return { base64: b64, mimeType: mime };
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const outUrl = canvas.toDataURL('image/jpeg', 0.85);
+      return { base64: outUrl.split(',')[1] || b64, mimeType: 'image/jpeg' };
+    } catch {
+      return { base64: b64, mimeType: mime };
+    }
+  };
+
+  // Convert with AI (automatic byte-safe multi-page chunking for PDFs)
   const handleConvert = async () => {
     if (!fileBase64 && !selectedFile) {
       setErrorMessage('Por favor, selecione ou arraste um arquivo de extrato bancário.');
@@ -308,13 +375,17 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
     setProcessingProgress(null);
 
     try {
-      const isPdf =
-        fileMimeType === 'application/pdf' ||
-        (selectedFile?.name || '').toLowerCase().endsWith('.pdf');
+      const fileNameLower = (selectedFile?.name || '').toLowerCase();
+      const isPdf = fileMimeType === 'application/pdf' || fileNameLower.endsWith('.pdf');
+      const isPlainTextOrOfx =
+        fileNameLower.endsWith('.txt') ||
+        fileNameLower.endsWith('.ofx') ||
+        fileNameLower.endsWith('.csv') ||
+        (fileMimeType || '').startsWith('text/');
 
       let finalData: any = null;
 
-      // Multi-page PDF handling: read Page 1 first for bank/year context, then 1 page per request (concurrency 3)
+      // Multi-page PDF handling: read first batch for bank/year context, then byte-safe chunks (max 3 pages & < 2.4MB base64)
       if (isPdf && selectedFile) {
         let srcPdf: PDFDocument | null = null;
         let totalPages = 0;
@@ -329,128 +400,133 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
           totalPages = 0;
         }
 
-        if (srcPdf && totalPages > 2) {
-          const BATCH_SIZE = 4;
-          const ranges: { start: number; end: number }[] = [];
-          for (let i = 0; i < totalPages; i += BATCH_SIZE) {
-            ranges.push({ start: i, end: Math.min(i + BATCH_SIZE - 1, totalPages - 1) });
-          }
+        if (srcPdf && totalPages > 1) {
+          const MAX_CHUNK_BASE64 = 2_400_000; // safely below Vercel's 4.5MB limit
+          const DEFAULT_BATCH = totalPages > 2 ? 3 : 2;
 
-          const extractRange = async (range: { start: number; end: number }, contextHint?: string) => {
+          const buildSliceBase64 = async (start: number, end: number) => {
             const subDoc = await PDFDocument.create();
             const indices: number[] = [];
-            for (let p = range.start; p <= range.end; p++) indices.push(p);
+            for (let p = start; p <= end; p++) indices.push(p);
             const copied = await subDoc.copyPages(srcPdf!, indices);
             copied.forEach(p => subDoc.addPage(p));
             const subBytes = await subDoc.save();
-            const chunkBase64 = uint8ToBase64(subBytes);
-
-            let lastError: any = null;
-            for (let attempt = 0; attempt < 2; attempt++) {
-              try {
-                const chunkRes = await fetch('/api/ofx/extract-chunk', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    fileBase64: chunkBase64,
-                    mimeType: 'application/pdf',
-                    bankHint: contextHint,
-                  }),
-                });
-                const chunkJson = await chunkRes.json();
-                if (!chunkRes.ok || !chunkJson.extraction) {
-                  const err = new Error(
-                    chunkJson.error || `Falha ao ler páginas ${range.start + 1}-${range.end + 1} de ${totalPages}`
-                  ) as Error & { noRetry?: boolean };
-                  if (chunkRes.status === 429 || chunkRes.status === 403 || chunkRes.status === 400) {
-                    err.noRetry = true;
-                  }
-                  throw err;
-                }
-                return chunkJson.extraction;
-              } catch (err: any) {
-                lastError = err;
-                if (err?.noRetry || attempt === 1) {
-                  throw err;
-                }
-                await new Promise(r => setTimeout(r, 800));
-              }
-            }
-            throw lastError;
+            return uint8ToBase64(subBytes);
           };
 
-          const extractedChunks: any[] = new Array(ranges.length);
-          const baseHint = accountingAccount ? `Conta contábil: ${accountingAccount}` : '';
-          const firstRange = ranges[0];
-          const firstLabel =
-            firstRange.start === firstRange.end
-              ? `página ${firstRange.start + 1}`
-              : `páginas ${firstRange.start + 1} a ${firstRange.end + 1}`;
+          // Build size-checked ranges so even heavy scanned PDFs never trigger 413 on Vercel
+          const chunkQueue: { start: number; end: number; prebuiltB64?: string }[] = [];
+          const splitRangeToFit = async (start: number, end: number) => {
+            const b64 = await buildSliceBase64(start, end);
+            if (b64.length <= MAX_CHUNK_BASE64 || start === end) {
+              if (b64.length > 3_600_000) {
+                throw new Error(
+                  `A página ${start + 1} do PDF possui imagem muito pesada (${(b64.length / 1_000_000).toFixed(1)} MB) e excede o limite de upload do servidor.`
+                );
+              }
+              chunkQueue.push({ start, end, prebuiltB64: b64 });
+              return;
+            }
+            const mid = Math.floor((start + end) / 2);
+            await splitRangeToFit(start, mid);
+            await splitRangeToFit(mid + 1, end);
+          };
 
-          setProcessingProgress({
-            totalPages,
-            processedPages: 0,
-            foundTransactions: 0,
-            statusLabel: `Lendo ${firstLabel} de ${totalPages} (cabeçalho e lançamentos iniciais)...`,
-          });
+          if (totalPages > 2 || (fileBase64 && fileBase64.length > MAX_CHUNK_BASE64)) {
+            setProcessingProgress({
+              totalPages,
+              processedPages: 0,
+              foundTransactions: 0,
+              statusLabel: `Preparando lotes seguros de ${totalPages} páginas...`,
+            });
 
-          // 1. Read first batch (pages 1..4) first to capture Bank, Agency, Account, CNPJ, and Year
-          const firstExtraction = await extractRange(firstRange, baseHint || undefined);
-          extractedChunks[0] = firstExtraction;
+            for (let i = 0; i < totalPages; i += DEFAULT_BATCH) {
+              await splitRangeToFit(i, Math.min(i + DEFAULT_BATCH - 1, totalPages - 1));
+            }
 
-          let processedPages = firstRange.end - firstRange.start + 1;
-          let foundTransactions = firstExtraction?.transactions?.length || 0;
+            const extractRange = async (
+              range: { start: number; end: number; prebuiltB64?: string },
+              contextHint?: string
+            ) => {
+              const chunkBase64 = range.prebuiltB64 || (await buildSliceBase64(range.start, range.end));
 
-          const inferredYear =
-            (firstExtraction?.startDate && /^\d{4}/.test(firstExtraction.startDate) ? firstExtraction.startDate.slice(0, 4) : '') ||
-            (firstExtraction?.transactions?.[0]?.date && /^\d{4}/.test(firstExtraction.transactions[0].date)
-              ? firstExtraction.transactions[0].date.slice(0, 4)
-              : '');
+              let lastError: any = null;
+              for (let attempt = 0; attempt < 2; attempt++) {
+                try {
+                  const chunkRes = await fetch('/api/ofx/extract-chunk', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      fileBase64: chunkBase64,
+                      mimeType: 'application/pdf',
+                      bankHint: contextHint,
+                    }),
+                  });
+                  const chunkJson = await parseSafeJson(chunkRes);
+                  if (!chunkRes.ok || !chunkJson.extraction) {
+                    const err = new Error(
+                      chunkJson.error || `Falha ao ler páginas ${range.start + 1}-${range.end + 1} de ${totalPages}`
+                    ) as Error & { noRetry?: boolean };
+                    if (
+                      chunkRes.status === 429 ||
+                      chunkRes.status === 403 ||
+                      chunkRes.status === 400 ||
+                      chunkRes.status === 413
+                    ) {
+                      err.noRetry = true;
+                    }
+                    throw err;
+                  }
+                  return chunkJson.extraction;
+                } catch (err: any) {
+                  lastError = err;
+                  if (err?.noRetry || attempt === 1) {
+                    throw err;
+                  }
+                  await new Promise(r => setTimeout(r, 800));
+                }
+              }
+              throw lastError;
+            };
 
-          const sharedContextParts = [
-            baseHint,
-            firstExtraction?.bankName ? `Banco: ${firstExtraction.bankName} (${firstExtraction.bankCode || ''})` : '',
-            firstExtraction?.agency ? `Agência: ${firstExtraction.agency}` : '',
-            firstExtraction?.accountNumber ? `Conta: ${firstExtraction.accountNumber}` : '',
-            inferredYear ? `Ano do extrato: ${inferredYear} (use este ano se a página mostrar apenas DD/MM)` : '',
-          ].filter(Boolean);
-          const sharedContextHint = sharedContextParts.join(' | ') || undefined;
-
-          setProcessingProgress({
-            totalPages,
-            processedPages,
-            foundTransactions,
-            statusLabel: `${processedPages} de ${totalPages} páginas lidas • ${foundTransactions} lançamentos extraídos`,
-          });
-
-          // 2. Read remaining batches in parallel (concurrency = 2)
-          const CONCURRENCY = 2;
-          for (let i = 1; i < ranges.length; i += CONCURRENCY) {
-            const batchSlice = ranges.slice(i, i + CONCURRENCY);
-            const rangeLabel = batchSlice
-              .map(r => (r.start === r.end ? `pág. ${r.start + 1}` : `págs. ${r.start + 1}-${r.end + 1}`))
-              .join(' e ');
+            const extractedChunks: any[] = new Array(chunkQueue.length);
+            const baseHint = accountingAccount ? `Conta contábil: ${accountingAccount}` : '';
+            const firstRange = chunkQueue[0];
+            const firstLabel =
+              firstRange.start === firstRange.end
+                ? `página ${firstRange.start + 1}`
+                : `páginas ${firstRange.start + 1} a ${firstRange.end + 1}`;
 
             setProcessingProgress({
               totalPages,
-              processedPages,
-              foundTransactions,
-              statusLabel: `Lendo ${rangeLabel} de ${totalPages} com IA...`,
+              processedPages: 0,
+              foundTransactions: 0,
+              statusLabel: `Lendo ${firstLabel} de ${totalPages} (cabeçalho e lançamentos iniciais)...`,
             });
 
-            const settled = await Promise.all(
-              batchSlice.map(async (range, offset) => ({
-                idx: i + offset,
-                pageCount: range.end - range.start + 1,
-                extraction: await extractRange(range, sharedContextHint),
-              }))
-            );
+            // 1. Read first batch first to capture Bank, Agency, Account, CNPJ, and Year
+            const firstExtraction = await extractRange(firstRange, baseHint || undefined);
+            extractedChunks[0] = firstExtraction;
 
-            for (const item of settled) {
-              extractedChunks[item.idx] = item.extraction;
-              processedPages += item.pageCount;
-              foundTransactions += item.extraction?.transactions?.length || 0;
-            }
+            let processedPages = firstRange.end - firstRange.start + 1;
+            let foundTransactions = firstExtraction?.transactions?.length || 0;
+
+            const inferredYear =
+              (firstExtraction?.startDate && /^\d{4}/.test(firstExtraction.startDate)
+                ? firstExtraction.startDate.slice(0, 4)
+                : '') ||
+              (firstExtraction?.transactions?.[0]?.date && /^\d{4}/.test(firstExtraction.transactions[0].date)
+                ? firstExtraction.transactions[0].date.slice(0, 4)
+                : '');
+
+            const sharedContextParts = [
+              baseHint,
+              firstExtraction?.bankName ? `Banco: ${firstExtraction.bankName} (${firstExtraction.bankCode || ''})` : '',
+              firstExtraction?.agency ? `Agência: ${firstExtraction.agency}` : '',
+              firstExtraction?.accountNumber ? `Conta: ${firstExtraction.accountNumber}` : '',
+              inferredYear ? `Ano do extrato: ${inferredYear} (use este ano se a página mostrar apenas DD/MM)` : '',
+            ].filter(Boolean);
+            const sharedContextHint = sharedContextParts.join(' | ') || undefined;
 
             setProcessingProgress({
               totalPages,
@@ -458,52 +534,102 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
               foundTransactions,
               statusLabel: `${processedPages} de ${totalPages} páginas lidas • ${foundTransactions} lançamentos extraídos`,
             });
-          }
 
-          setProcessingProgress({
-            totalPages,
-            processedPages: totalPages,
-            foundTransactions,
-            statusLabel: `Consolidando ${foundTransactions} lançamentos e gerando arquivo OFX...`,
-          });
+            // 2. Read remaining batches in parallel (concurrency = 2)
+            const CONCURRENCY = 2;
+            for (let i = 1; i < chunkQueue.length; i += CONCURRENCY) {
+              const batchSlice = chunkQueue.slice(i, i + CONCURRENCY);
+              const rangeLabel = batchSlice
+                .map(r => (r.start === r.end ? `pág. ${r.start + 1}` : `págs. ${r.start + 1}-${r.end + 1}`))
+                .join(' e ');
 
-          const finalizeRes = await fetch('/api/ofx/finalize', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              chunks: extractedChunks,
+              setProcessingProgress({
+                totalPages,
+                processedPages,
+                foundTransactions,
+                statusLabel: `Lendo ${rangeLabel} de ${totalPages} com IA...`,
+              });
+
+              const settled = await Promise.all(
+                batchSlice.map(async (range, offset) => ({
+                  idx: i + offset,
+                  pageCount: range.end - range.start + 1,
+                  extraction: await extractRange(range, sharedContextHint),
+                }))
+              );
+
+              for (const item of settled) {
+                extractedChunks[item.idx] = item.extraction;
+                processedPages += item.pageCount;
+                foundTransactions += item.extraction?.transactions?.length || 0;
+              }
+
+              setProcessingProgress({
+                totalPages,
+                processedPages,
+                foundTransactions,
+                statusLabel: `${processedPages} de ${totalPages} páginas lidas • ${foundTransactions} lançamentos extraídos`,
+              });
+            }
+
+            setProcessingProgress({
               totalPages,
-              pagesProcessed: totalPages,
-              companyId: currentCompany.id,
-              fileName: selectedFile.name,
-              // Keep original PDF in history if within Vercel JSON limit (~3.2MB base64)
-              fileBase64: fileBase64 && fileBase64.length < 3_200_000 ? fileBase64 : undefined,
-              mimeType: 'application/pdf',
-            }),
-          });
-          const finalizeData = await finalizeRes.json();
-          if (!finalizeRes.ok) {
-            throw new Error(finalizeData.error || 'Erro ao consolidar páginas do extrato.');
+              processedPages: totalPages,
+              foundTransactions,
+              statusLabel: `Consolidando ${foundTransactions} lançamentos e gerando arquivo OFX...`,
+            });
+
+            const finalizeRes = await fetch('/api/ofx/finalize', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chunks: extractedChunks,
+                totalPages,
+                pagesProcessed: totalPages,
+                companyId: currentCompany.id,
+                fileName: selectedFile.name,
+                // Keep original PDF in history only if well below Vercel 4.5MB limit alongside chunks JSON
+                fileBase64: fileBase64 && fileBase64.length < 1_500_000 ? fileBase64 : undefined,
+                mimeType: 'application/pdf',
+              }),
+            });
+            const finalizeData = await parseSafeJson(finalizeRes);
+            if (!finalizeRes.ok) {
+              throw new Error(finalizeData.error || 'Erro ao consolidar páginas do extrato.');
+            }
+            finalData = finalizeData;
           }
-          finalData = finalizeData;
         }
       }
 
-      // Single-request path for images, TXT/OFX, or 1–2 page PDFs
+      // Single-request path for images, TXT/OFX, or small 1–2 page PDFs
       if (!finalData) {
+        let payloadBody: any = {
+          fileName: selectedFile?.name || 'extrato_bancario.pdf',
+          bankHint: accountingAccount ? `Conta contábil: ${accountingAccount}` : undefined,
+          companyId: currentCompany.id,
+        };
+
+        if (isPlainTextOrOfx && selectedFile) {
+          payloadBody.rawText = await selectedFile.text();
+        } else if (fileBase64) {
+          const prepared = await compressImageIfNeeded(fileBase64, fileMimeType || 'application/pdf');
+          if (prepared.base64.length > 3_400_000) {
+            throw new Error(
+              'O arquivo selecionado ultrapassa o limite de envio de 3,4 MB. Reduza a resolução ou divida o PDF.'
+            );
+          }
+          payloadBody.fileBase64 = prepared.base64;
+          payloadBody.mimeType = prepared.mimeType;
+        }
+
         const response = await fetch('/api/ofx/convert', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fileBase64,
-            mimeType: fileMimeType,
-            fileName: selectedFile?.name || 'extrato_bancario.pdf',
-            bankHint: accountingAccount ? `Conta contábil: ${accountingAccount}` : undefined,
-            companyId: currentCompany.id,
-          }),
+          body: JSON.stringify(payloadBody),
         });
 
-        const data = await response.json();
+        const data = await parseSafeJson(response);
         if (!response.ok) {
           throw new Error(data.error || 'Erro ao processar o extrato com IA.');
         }
@@ -1398,7 +1524,7 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
                 <span>Código OFX (XML/SGML)</span>
               </button>
 
-              {previewStatement.fileBase64 && (
+              {(previewStatement.fileBase64 || previewStatement.hasOriginalFile) && (
                 <button
                   type="button"
                   onClick={() => setPreviewTab('document')}
@@ -1632,6 +1758,11 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
                           </div>
                         </object>
                       )
+                    ) : previewStatement.hasOriginalFile ? (
+                      <div className="p-8 text-center text-slate-500 text-xs flex flex-col items-center gap-2">
+                        <Loader2 className="w-5 h-5 animate-spin text-teal-600" />
+                        <span>Carregando documento original...</span>
+                      </div>
                     ) : (
                       <div className="p-8 text-center text-slate-400 text-xs">
                         Nenhum documento original em base64 anexado a este registro.
