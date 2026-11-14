@@ -45,6 +45,37 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    function isValidCompanyDocument(data, companyId) {
+      return data.keys().hasAll(['id', 'companyId', 'fileName', 'mimeType', 'fileSize', 'category', 'status', 'competenceMonth', 'aiClassified']) &&
+        data.keys().hasOnly([
+          'id', 'companyId', 'fileName', 'mimeType', 'fileSize', 'category', 'status',
+          'competenceMonth', 'documentDate', 'issuerOrBank', 'documentNumber', 'amount',
+          'detectedCnpj', 'summary', 'aiClassified', 'confidence', 'notes', 'uploadedBy',
+          'uploadedAt', 'updatedAt'
+        ]) &&
+        data.id is string && isValidId(data.id) &&
+        data.companyId == companyId &&
+        data.companyId is string && data.companyId.size() > 0 && data.companyId.size() <= 100 &&
+        data.fileName is string && data.fileName.size() > 0 && data.fileName.size() <= 200 &&
+        data.mimeType is string && data.mimeType.size() > 0 && data.mimeType.size() <= 120 &&
+        data.fileSize is int && data.fileSize >= 0 &&
+        data.category in ['extrato', 'nota_fiscal', 'guia_imposto', 'comprovante', 'folha_contrato', 'outro'] &&
+        data.status in ['pendente', 'em_analise', 'contabilizado'] &&
+        data.competenceMonth is string && data.competenceMonth.size() == 7 && data.competenceMonth.matches('^[0-9]{4}-[0-9]{2}$') &&
+        data.aiClassified is bool &&
+        (!('documentDate' in data) || (data.documentDate is string && data.documentDate.size() <= 10)) &&
+        (!('issuerOrBank' in data) || (data.issuerOrBank is string && data.issuerOrBank.size() <= 120)) &&
+        (!('documentNumber' in data) || (data.documentNumber is string && data.documentNumber.size() <= 60)) &&
+        (!('amount' in data) || (data.amount is number)) &&
+        (!('detectedCnpj' in data) || (data.detectedCnpj is string && data.detectedCnpj.size() <= 25)) &&
+        (!('summary' in data) || (data.summary is string && data.summary.size() <= 250)) &&
+        (!('confidence' in data) || (data.confidence is int && data.confidence >= 0 && data.confidence <= 100)) &&
+        (!('notes' in data) || (data.notes is string && data.notes.size() <= 500)) &&
+        (!('uploadedBy' in data) || (data.uploadedBy is string && data.uploadedBy.size() <= 150)) &&
+        (!('uploadedAt' in data) || (data.uploadedAt is string && data.uploadedAt.size() <= 40)) &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 40));
+    }
+
     // Companies collection
     match /companies/{companyId} {
       allow read: if isSignedIn();
@@ -66,6 +97,14 @@ service cloud.firestore {
         allow create: if isSignedIn() && (isCompanyUser(companyId) || isAdmin()) && isValidId(statementId);
         allow update: if isSignedIn() && (isCompanyUser(companyId) || isAdmin()) && isValidId(statementId);
         allow delete: if isSignedIn() && (isCompanyUser(companyId) || isAdmin()) && isValidId(statementId);
+      }
+
+      // Documents sub-collection (Arquivos Contábeis)
+      match /documents/{documentId} {
+        allow read: if isSignedIn() && (isCompanyUser(companyId) || isAdmin());
+        allow create: if isSignedIn() && isValidId(documentId) && isValidCompanyDocument(request.resource.data, companyId) && (isCompanyUser(companyId) || isAdmin());
+        allow update: if isSignedIn() && isValidId(documentId) && isValidCompanyDocument(request.resource.data, companyId) && request.resource.data.id == resource.data.id && request.resource.data.companyId == resource.data.companyId && (isCompanyUser(companyId) || isAdmin());
+        allow delete: if isSignedIn() && isValidId(documentId) && (isCompanyUser(companyId) || isAdmin());
       }
     }
   }

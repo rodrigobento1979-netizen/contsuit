@@ -14,7 +14,7 @@ interface HeaderProps {
   currentUser: User;
   currentCompany?: Company;
   allCompanies: Company[];
-  activeTab: 'home' | 'assets' | 'companies' | 'accounts' | 'ofx' | 'fees' | 'database' | 'admin' | 'depreciation';
+  activeTab: 'home' | 'assets' | 'companies' | 'accounts' | 'ofx' | 'documents' | 'fees' | 'database' | 'admin' | 'depreciation';
   onSwitchCompany: (companyId: string) => void;
   onOpenUserModal: () => void;
   onLogout: () => void;
@@ -39,6 +39,7 @@ export const Header: React.FC<HeaderProps> = ({
     assets: { title: 'Ativo Imobilizado (CPC 27)', subtitle: 'Inventário, Depreciação, Baixas e Integração NG/Domínio' },
     depreciation: { title: 'Apuração de Depreciação', subtitle: 'Quotas Mensais, Trimestrais e Anuais' },
     ofx: { title: 'Conversor OFX com IA', subtitle: 'Extratos Bancários para ERP Contábil' },
+    documents: { title: 'Arquivos & Documentos Contábeis', subtitle: 'Classificação por Tipo com IA e Organização em Kanban' },
     accounts: { title: 'Plano de Contas Contábil', subtitle: 'Estrutura & Parâmetros do Sistema' },
     fees: { title: 'Controle de Honorários', subtitle: 'Gestão Financeira do Escritório' },
     database: { title: 'Banco de Dados & Backup', subtitle: 'Configuração, Sincronização & Limpeza' },

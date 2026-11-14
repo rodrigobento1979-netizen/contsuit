@@ -16,12 +16,13 @@ import {
   Boxes,
   Wrench,
   Settings,
-  Landmark
+  Landmark,
+  FolderOpen
 } from 'lucide-react';
 import { User, Company } from '../types';
 import { ContSuiteLogo } from './ContSuiteLogo';
 
-export type AppNavTab = 'home' | 'assets' | 'companies' | 'accounts' | 'ofx' | 'fees' | 'database' | 'admin' | 'depreciation';
+export type AppNavTab = 'home' | 'assets' | 'companies' | 'accounts' | 'ofx' | 'documents' | 'fees' | 'database' | 'admin' | 'depreciation';
 
 interface SidebarProps {
   currentUser: User;
@@ -44,11 +45,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const isAdmin = currentUser.role === 'admin';
 
-  // Section expansion state - todos os itens iniciam fechados conforme solicitado
-  const [cadastrosOpen, setCadastrosOpen] = useState(false);
-  const [patrimonioOpen, setPatrimonioOpen] = useState(false);
-  const [ferramentasOpen, setFerramentasOpen] = useState(false);
-  const [configuracoesOpen, setConfiguracoesOpen] = useState(false);
+  // Accordion state: todas as seções iniciam fechadas e abrir uma recolhe as demais
+  type SidebarGroup = 'cadastros' | 'patrimonio' | 'ferramentas' | 'configuracoes';
+  const [openGroup, setOpenGroup] = useState<SidebarGroup | null>(null);
+
+  const toggleGroup = (group: SidebarGroup) => {
+    setOpenGroup((prev) => (prev === group ? null : group));
+  };
 
   return (
     <aside className="w-64 bg-gradient-to-b from-[#004d40] via-[#00695c] to-[#004d40] text-white flex flex-col shrink-0 border-r border-[#00332c] shadow-xl z-30 select-none overflow-x-hidden">
@@ -105,17 +108,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* GRUPO 1: CADASTROS */}
         <div className="space-y-1">
           <button
-            onClick={() => setCadastrosOpen(!cadastrosOpen)}
+            onClick={() => toggleGroup('cadastros')}
             className="w-full flex items-center justify-between px-2 py-1 text-[10px] font-extrabold uppercase tracking-wider text-teal-300/90 hover:text-white transition cursor-pointer"
           >
             <div className="flex items-center gap-1.5">
               <Boxes className="w-3.5 h-3.5 text-teal-300" />
               <span>Cadastros</span>
             </div>
-            {cadastrosOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            {openGroup === 'cadastros' ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
           </button>
 
-          {cadastrosOpen && (
+          {openGroup === 'cadastros' && (
             <div className="space-y-1 pl-1">
               {/* Empresas */}
               <button
@@ -165,17 +168,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* GRUPO 2: PATRIMÔNIO (ATIVO IMOBILIZADO UNIFICADO - INICIA FECHADO) */}
         <div className="space-y-1">
           <button
-            onClick={() => setPatrimonioOpen(!patrimonioOpen)}
+            onClick={() => toggleGroup('patrimonio')}
             className="w-full flex items-center justify-between px-2 py-1 text-[10px] font-extrabold uppercase tracking-wider text-teal-300/90 hover:text-white transition cursor-pointer"
           >
             <div className="flex items-center gap-1.5">
               <Building2 className="w-3.5 h-3.5 text-teal-300" />
               <span>Patrimônio</span>
             </div>
-            {patrimonioOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            {openGroup === 'patrimonio' ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
           </button>
 
-          {patrimonioOpen && (
+          {openGroup === 'patrimonio' && (
             <div className="pl-1">
               <button
                 onClick={() => setActiveTab('assets')}
@@ -203,20 +206,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </div>
 
-        {/* GRUPO 3: FERRAMENTAS (CONVERSOR OFX & HONORÁRIOS) */}
+        {/* GRUPO 3: FERRAMENTAS (CONVERSOR OFX, ARQUIVOS & HONORÁRIOS) */}
         <div className="space-y-1">
           <button
-            onClick={() => setFerramentasOpen(!ferramentasOpen)}
+            onClick={() => toggleGroup('ferramentas')}
             className="w-full flex items-center justify-between px-2 py-1 text-[10px] font-extrabold uppercase tracking-wider text-teal-300/90 hover:text-white transition cursor-pointer"
           >
             <div className="flex items-center gap-1.5">
               <Wrench className="w-3.5 h-3.5 text-teal-300" />
               <span>Ferramentas</span>
             </div>
-            {ferramentasOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            {openGroup === 'ferramentas' ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
           </button>
 
-          {ferramentasOpen && (
+          {openGroup === 'ferramentas' && (
             <div className="space-y-1 pl-1">
               {/* Conversor OFX */}
               <button
@@ -237,6 +240,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   </div>
                 </div>
                 {activeTab === 'ofx' && <ChevronRight className="w-3.5 h-3.5 text-[#a7ffeb] shrink-0" />}
+              </button>
+
+              {/* Arquivos */}
+              <button
+                onClick={() => setActiveTab('documents')}
+                className={`w-full text-left px-3 py-2 rounded-xl transition cursor-pointer flex items-center justify-between text-xs font-semibold ${
+                  activeTab === 'documents'
+                    ? 'bg-[#00897b] text-white shadow-md shadow-teal-950/20 font-bold border-l-4 border-[#00bfa5]'
+                    : 'text-teal-100/90 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <FolderOpen className={`w-4 h-4 shrink-0 ${activeTab === 'documents' ? 'text-[#a7ffeb]' : 'text-teal-300'}`} />
+                  <div className="truncate">
+                    <span className="block truncate">Arquivos</span>
+                    <span className="text-[10px] opacity-75 font-normal block truncate">
+                      Documentos & Kanban IA
+                    </span>
+                  </div>
+                </div>
+                {activeTab === 'documents' && <ChevronRight className="w-3.5 h-3.5 text-[#a7ffeb] shrink-0" />}
               </button>
 
               {/* Honorários */}
@@ -266,17 +290,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* GRUPO 4: CONFIGURAÇÕES (BANCO DE DADOS & USUÁRIOS/CONVITES) */}
         <div className="space-y-1">
           <button
-            onClick={() => setConfiguracoesOpen(!configuracoesOpen)}
+            onClick={() => toggleGroup('configuracoes')}
             className="w-full flex items-center justify-between px-2 py-1 text-[10px] font-extrabold uppercase tracking-wider text-teal-300/90 hover:text-white transition cursor-pointer"
           >
             <div className="flex items-center gap-1.5">
               <Settings className="w-3.5 h-3.5 text-teal-300" />
               <span>Configurações</span>
             </div>
-            {configuracoesOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            {openGroup === 'configuracoes' ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
           </button>
 
-          {configuracoesOpen && (
+          {openGroup === 'configuracoes' && (
             <div className="space-y-1 pl-1">
               {/* Banco de Dados */}
               <button

@@ -32,7 +32,13 @@ import {
   exportBackup,
   restoreBackup,
   clearDemoData,
+  getDocuments,
+  getDocumentById,
+  createDocument,
+  updateDocument,
+  deleteDocument,
 } from './db.ts';
+import { classifyDocumentWithAI } from './document-ai.ts';
 import {
   calculateDepreciationForPeriod,
   exportToDominioSistemas,
@@ -1236,5 +1242,196 @@ apiRouter.post('/database/clear-demo', (req: Request, res: Response) => {
     return res.status(500).json({ error: err.message });
   }
 });
+
+// ---------------------------------------------------------
+// ARQUIVOS & DOCUMENTOS CONTÁBEIS (COMPANY DOCUMENTS)
+// ---------------------------------------------------------
+apiRouter.get('/documents', (req: Request, res: Response) => {
+  try {
+    const { companyId } = req.query;
+    const list = getDocuments(companyId as string).map(({ fileBase64, ...rest }) => ({
+      ...rest,
+      hasOriginalFile: Boolean(fileBase64),
+    }));
+    return res.json(list);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.get('/documents/:id', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const doc = getDocumentById(id);
+    if (!doc) {
+      return res.status(404).json({ error: 'Arquivo não encontrado.' });
+    }
+    return res.json(doc);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/documents/classify', async (req: Request, res: Response) => {
+  try {
+    const { fileName, mimeType, base64Data, textPreview } = req.body || {};
+    if (!fileName) {
+      return res.status(400).json({ error: 'Nome do arquivo é obrigatório.' });
+    }
+    const result = await classifyDocumentWithAI({
+      fileName: String(fileName),
+      mimeType: String(mimeType || ''),
+      base64Data: typeof base64Data === 'string' ? base64Data : undefined,
+      textPreview: typeof textPreview === 'string' ? textPreview : undefined,
+    });
+    return res.json(result);
+  } catch (err: any) {
+    console.error('Error classifying document:', err);
+    return res.status(500).json({ error: err.message || 'Falha ao classificar documento.' });
+  }
+});
+
+apiRouter.post('/documents', async (req: Request, res: Response) => {
+  try {
+    const {
+      companyId,
+      fileName,
+      mimeType,
+      fileSize,
+      fileBase64,
+      classificationBase64,
+      textPreview,
+      category,
+      status,
+      competenceMonth,
+      documentDate,
+      issuerOrBank,
+      documentNumber,
+      amount,
+      detectedCnpj,
+      summary,
+      aiClassified,
+      confidence,
+      notes,
+      uploadedBy,
+      autoClassify = true,
+    } = req.body || {};
+
+    if (!companyId || !fileName) {
+      return res.status(400).json({ error: 'Empresa e arquivo são obrigatórios.' });
+    }
+
+    let finalCategory = category;
+    let finalCompetence = competenceMonth || new Date().toISOString().slice(0, 7);
+    let finalDocDate = documentDate;
+    let finalIssuer = issuerOrBank;
+    let finalDocNum = documentNumber;
+    let finalAmount = amount !== undefined && amount !== null && amount !== '' ? Number(amount) : undefined;
+    let finalCnpj = detectedCnpj;
+    let finalSummary = summary;
+    let finalAiClassified = Boolean(aiClassified);
+    let finalConfidence = confidence !== undefined ? Number(confidence) : undefined;
+
+    if (autoClassify && !category) {
+      const aiResult = await classifyDocumentWithAI({
+        fileName: String(fileName),
+        mimeType: String(mimeType || ''),
+        base64Data: typeof classificationBase64 === 'string' ? classificationBase64 : (typeof fileBase64 === 'string' ? fileBase64 : undefined),
+        textPreview: typeof textPreview === 'string' ? textPreview : undefined,
+      });
+      finalCategory = aiResult.category;
+      finalCompetence = competenceMonth || aiResult.competenceMonth;
+      finalDocDate = finalDocDate || aiResult.documentDate;
+      finalIssuer = finalIssuer || aiResult.issuerOrBank;
+      finalDocNum = finalDocNum || aiResult.documentNumber;
+      finalAmount = finalAmount ?? aiResult.amount;
+      finalCnpj = finalCnpj || aiResult.detectedCnpj;
+      finalSummary = finalSummary || aiResult.summary;
+      finalAiClassified = aiResult.aiClassified;
+      finalConfidence = aiResult.confidence;
+    }
+
+    const created = createDocument({
+      companyId: String(companyId),
+      fileName: String(fileName).slice(0, 200),
+      mimeType: String(mimeType || 'application/octet-stream').slice(0, 120),
+      fileSize: Number(fileSize || 0),
+      category: finalCategory || 'outro',
+      status: status || 'pendente',
+      competenceMonth: String(finalCompetence).slice(0, 7),
+      documentDate: finalDocDate ? String(finalDocDate).slice(0, 10) : undefined,
+      issuerOrBank: finalIssuer ? String(finalIssuer).slice(0, 120) : undefined,
+      documentNumber: finalDocNum ? String(finalDocNum).slice(0, 60) : undefined,
+      amount: typeof finalAmount === 'number' && !isNaN(finalAmount) ? finalAmount : undefined,
+      detectedCnpj: finalCnpj ? String(finalCnpj).slice(0, 25) : undefined,
+      summary: finalSummary ? String(finalSummary).slice(0, 250) : undefined,
+      aiClassified: finalAiClassified,
+      confidence: finalConfidence,
+      notes: notes ? String(notes).slice(0, 500) : undefined,
+      uploadedBy: uploadedBy ? String(uploadedBy).slice(0, 150) : undefined,
+      fileBase64: typeof fileBase64 === 'string' ? fileBase64 : undefined,
+    });
+
+    const { fileBase64: savedB64, ...meta } = created;
+    return res.json({
+      ...meta,
+      hasOriginalFile: Boolean(savedB64),
+    });
+  } catch (err: any) {
+    console.error('Error creating document:', err);
+    return res.status(500).json({ error: err.message || 'Falha ao salvar arquivo.' });
+  }
+});
+
+apiRouter.put('/documents/:id', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const allowedUpdates: Record<string, any> = {};
+    const fields = [
+      'category',
+      'status',
+      'competenceMonth',
+      'documentDate',
+      'issuerOrBank',
+      'documentNumber',
+      'amount',
+      'detectedCnpj',
+      'summary',
+      'notes',
+      'aiClassified',
+      'confidence',
+    ];
+    for (const f of fields) {
+      if (req.body && req.body[f] !== undefined) {
+        allowedUpdates[f] = req.body[f];
+      }
+    }
+    const updated = updateDocument(id, allowedUpdates);
+    if (!updated) {
+      return res.status(404).json({ error: 'Arquivo não encontrado para atualização.' });
+    }
+    const { fileBase64, ...meta } = updated;
+    return res.json({
+      ...meta,
+      hasOriginalFile: Boolean(fileBase64),
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.delete('/documents/:id', (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const deleted = deleteDocument(id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Arquivo não encontrado para exclusão.' });
+    }
+    return res.json({ success: true });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 
 

@@ -22,7 +22,7 @@ import {
   handleFirestoreError, 
   OperationType 
 } from './config';
-import { User, Company, Asset, ConvertedStatement } from '../types';
+import { User, Company, Asset, ConvertedStatement, CompanyDocument } from '../types';
 
 /**
  * Realiza login com Google via Popup (recomendado para o ambiente de iframe)
@@ -207,3 +207,59 @@ export async function deleteUserFromFirestore(userId: string): Promise<void> {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
+
+// -------------------------------------------------------------
+// FIRESTORE: ARQUIVOS CONTÁBEIS (COMPANY DOCUMENTS)
+// -------------------------------------------------------------
+export async function fetchDocumentsFromFirestore(companyId: string): Promise<CompanyDocument[]> {
+  if (!auth.currentUser || !companyId) return [];
+  const path = `companies/${companyId}/documents`;
+  try {
+    const snap = await getDocs(collection(db, 'companies', companyId, 'documents'));
+    const list: CompanyDocument[] = [];
+    snap.forEach((d) => {
+      list.push({ id: d.id, ...d.data() } as CompanyDocument);
+    });
+    return list;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+    return [];
+  }
+}
+
+export async function saveDocumentToFirestore(companyId: string, documentData: CompanyDocument): Promise<void> {
+  if (!auth.currentUser || !companyId || !documentData?.id) return;
+  const path = `companies/${companyId}/documents/${documentData.id}`;
+  // Strip heavy base64 binary to respect Firestore 1MB document limit
+  const { fileBase64, hasOriginalFile, ...metadataOnly } = documentData;
+  const cleanPayload: Record<string, any> = {};
+  Object.entries({
+    ...metadataOnly,
+    companyId,
+    fileName: String(metadataOnly.fileName || '').slice(0, 200),
+    mimeType: String(metadataOnly.mimeType || 'application/octet-stream').slice(0, 120),
+    fileSize: Number(metadataOnly.fileSize || 0),
+    competenceMonth: String(metadataOnly.competenceMonth || new Date().toISOString().slice(0, 7)).slice(0, 7),
+    aiClassified: Boolean(metadataOnly.aiClassified),
+  }).forEach(([key, val]) => {
+    if (val !== undefined) {
+      cleanPayload[key] = val;
+    }
+  });
+  try {
+    await setDoc(doc(db, 'companies', companyId, 'documents', documentData.id), cleanPayload, { merge: true });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteDocumentFromFirestore(companyId: string, documentId: string): Promise<void> {
+  if (!auth.currentUser || !companyId || !documentId) return;
+  const path = `companies/${companyId}/documents/${documentId}`;
+  try {
+    await deleteDoc(doc(db, 'companies', companyId, 'documents', documentId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Header } from './components/Header';
 import { LoginScreen } from './components/LoginScreen';
 import { AssetsView } from './components/AssetsView';
@@ -13,6 +13,7 @@ import { HonorariosView } from './components/HonorariosView';
 import { ChartOfAccountsView } from './components/ChartOfAccountsView';
 import { DatabaseView } from './components/DatabaseView';
 import { CompaniesView } from './components/CompaniesView';
+import { DocumentsView } from './components/DocumentsView';
 import { Sidebar, AppNavTab } from './components/Sidebar';
 import { User, Company, Asset, DepreciationSummary, ConvertedStatement } from './types';
 import { Loader2, AlertCircle, CheckCircle } from 'lucide-react';
@@ -84,6 +85,7 @@ export default function App() {
   const [isCompanyModalOpen, setIsCompanyModalOpen] = useState(false);
   const [companyPrefill, setCompanyPrefill] = useState<{ name?: string; cnpj?: string; fantasyName?: string } | null>(null);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [pendingOfxFile, setPendingOfxFile] = useState<File | null>(null);
 
   const handleOpenCompanyModalWithPrefill = (prefill: { name?: string; cnpj?: string; fantasyName?: string }) => {
     setCompanyPrefill(prefill);
@@ -104,6 +106,37 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 3500);
   };
 
+  const currentCompanyIdRef = useRef(currentCompany.id);
+  useEffect(() => {
+    currentCompanyIdRef.current = currentCompany.id;
+  }, [currentCompany.id]);
+
+  // Resilient fetch wrapper for transient dev-server restarts or cold starts
+  const fetchWithRetry = useCallback(async (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+    retries = 2,
+    delayMs = 500
+  ): Promise<Response> => {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const res = await fetch(input, { cache: 'no-store', ...init });
+        if (res.status >= 502 && res.status <= 504 && attempt < retries) {
+          await new Promise(resolve => setTimeout(resolve, delayMs * (attempt + 1)));
+          continue;
+        }
+        return res;
+      } catch (err) {
+        lastError = err;
+        if (attempt < retries) {
+          await new Promise(resolve => setTimeout(resolve, delayMs * (attempt + 1)));
+        }
+      }
+    }
+    throw lastError;
+  }, []);
+
   // Safe JSON response parser that prevents crashes when servers return HTML 404 or text errors
   const safeJson = async <T,>(res: Response): Promise<T | null> => {
     try {
@@ -123,134 +156,136 @@ export default function App() {
 
   // 1. Fetch Companies and Users (Scoped to user role and tenant, resilient across Vercel & Firestore)
   const fetchCompaniesAndUsers = useCallback(async () => {
+    let apiComps: Company[] = [];
+    let apiUsers: User[] = [];
     try {
       const companyUrl = currentUser.role === 'client' && currentUser.companyId
         ? `/api/companies?role=client&companyId=${currentUser.companyId}`
         : '/api/companies';
 
       const [compRes, usersRes] = await Promise.all([
-        fetch(companyUrl),
-        fetch('/api/users'),
+        fetchWithRetry(companyUrl),
+        fetchWithRetry('/api/users'),
       ]);
 
-      const apiComps = (await safeJson<Company[]>(compRes)) || [];
-      const apiUsers = (await safeJson<User[]>(usersRes)) || [];
-
-      // Fetch from Firestore in parallel for bulletproof resilience
-      let firestoreUsers: User[] = [];
-      let firestoreCompanies: Company[] = [];
-      try {
-        const [fUsers, fComps] = await Promise.all([
-          fetchUsersFromFirestore(),
-          fetchCompaniesFromFirestore(),
-        ]);
-        firestoreUsers = fUsers || [];
-        firestoreCompanies = fComps || [];
-      } catch (fErr) {
-        console.warn('Could not load users/companies from Firestore:', fErr);
-      }
-
-      // Merge Companies from API, Firestore, and LocalStorage
-      let localComps: Company[] = [];
-      try {
-        const cached = localStorage.getItem('contsuite_cached_companies');
-        if (cached) localComps = JSON.parse(cached);
-      } catch {}
-
-      const compMap = new Map<string, Company>();
-      [...apiComps, ...firestoreCompanies, ...localComps].forEach(c => {
-        if (c && c.id) {
-          compMap.set(c.id, { ...compMap.get(c.id), ...c });
-        }
-      });
-      const mergedComps = Array.from(compMap.values());
-      if (mergedComps.length > 0) {
-        setAllCompanies(mergedComps);
-        try {
-          localStorage.setItem('contsuite_cached_companies', JSON.stringify(mergedComps));
-        } catch {}
-
-        const found = mergedComps.find(c => c.id === currentCompany.id);
-        if (found) {
-          setCurrentCompany(found);
-        } else {
-          setCurrentCompany(mergedComps[0]);
-        }
-      }
-
-      // Merge Users from API, Firestore, and LocalStorage
-      let localUsers: User[] = [];
-      try {
-        const cached = localStorage.getItem('contsuite_cached_users');
-        if (cached) localUsers = JSON.parse(cached);
-      } catch {}
-
-      const userMap = new Map<string, any>();
-      [...apiUsers, ...firestoreUsers, ...localUsers].forEach(u => {
-        if (u && (u.id || u.email)) {
-          const key = (u.email || u.id).toLowerCase().trim();
-          const existing = userMap.get(key) || {};
-          userMap.set(key, { ...existing, ...u });
-        }
-      });
-
-      const mergedUsers = Array.from(userMap.values()).map(u => ({
-        ...u,
-        company: mergedComps.find(c => c.id === u.companyId) || u.company,
-      }));
-
-      if (mergedUsers.length > 0) {
-        setAllUsers(mergedUsers);
-        try {
-          localStorage.setItem('contsuite_cached_users', JSON.stringify(mergedUsers));
-        } catch {}
-      }
+      apiComps = (await safeJson<Company[]>(compRes)) || [];
+      apiUsers = (await safeJson<User[]>(usersRes)) || [];
     } catch (err) {
-      console.error('Error fetching companies/users:', err);
+      console.warn('API temporarily unreachable when fetching companies/users, using cache/Firestore:', err);
     }
-  }, [currentCompany.id, currentUser.role, currentUser.companyId]);
+
+    // Fetch from Firestore in parallel for bulletproof resilience
+    let firestoreUsers: User[] = [];
+    let firestoreCompanies: Company[] = [];
+    try {
+      const [fUsers, fComps] = await Promise.all([
+        fetchUsersFromFirestore(),
+        fetchCompaniesFromFirestore(),
+      ]);
+      firestoreUsers = fUsers || [];
+      firestoreCompanies = fComps || [];
+    } catch (fErr) {
+      console.warn('Could not load users/companies from Firestore:', fErr);
+    }
+
+    // Merge Companies from API, Firestore, and LocalStorage
+    let localComps: Company[] = [];
+    try {
+      const cached = localStorage.getItem('contsuite_cached_companies');
+      if (cached) localComps = JSON.parse(cached);
+    } catch {}
+
+    const compMap = new Map<string, Company>();
+    [...apiComps, ...firestoreCompanies, ...localComps].forEach(c => {
+      if (c && c.id) {
+        compMap.set(c.id, { ...compMap.get(c.id), ...c });
+      }
+    });
+    const mergedComps = Array.from(compMap.values());
+    if (mergedComps.length > 0) {
+      setAllCompanies(mergedComps);
+      try {
+        localStorage.setItem('contsuite_cached_companies', JSON.stringify(mergedComps));
+      } catch {}
+
+      const found = mergedComps.find(c => c.id === currentCompanyIdRef.current);
+      if (found) {
+        setCurrentCompany(found);
+      } else {
+        setCurrentCompany(mergedComps[0]);
+      }
+    }
+
+    // Merge Users from API, Firestore, and LocalStorage
+    let localUsers: User[] = [];
+    try {
+      const cached = localStorage.getItem('contsuite_cached_users');
+      if (cached) localUsers = JSON.parse(cached);
+    } catch {}
+
+    const userMap = new Map<string, any>();
+    [...apiUsers, ...firestoreUsers, ...localUsers].forEach(u => {
+      if (u && (u.id || u.email)) {
+        const key = (u.email || u.id).toLowerCase().trim();
+        const existing = userMap.get(key) || {};
+        userMap.set(key, { ...existing, ...u });
+      }
+    });
+
+    const mergedUsers = Array.from(userMap.values()).map(u => ({
+      ...u,
+      company: mergedComps.find(c => c.id === u.companyId) || u.company,
+    }));
+
+    if (mergedUsers.length > 0) {
+      setAllUsers(mergedUsers);
+      try {
+        localStorage.setItem('contsuite_cached_users', JSON.stringify(mergedUsers));
+      } catch {}
+    }
+  }, [currentUser.role, currentUser.companyId, fetchWithRetry]);
 
   // 2. Fetch Assets for current company (Data Isolation)
   const fetchAssets = useCallback(async () => {
     if (!currentCompany.id) return;
     try {
-      const res = await fetch(`/api/assets?companyId=${currentCompany.id}`);
+      const res = await fetchWithRetry(`/api/assets?companyId=${currentCompany.id}`);
       const data = await safeJson<Asset[]>(res);
       if (data && Array.isArray(data)) {
         setAssets(data);
       }
     } catch (err) {
-      console.error('Error fetching assets:', err);
+      console.warn('Could not fetch assets right now:', err);
     }
-  }, [currentCompany.id]);
+  }, [currentCompany.id, fetchWithRetry]);
 
   // 3. Fetch Depreciation Summary for current company & month
   const fetchDepreciation = useCallback(async () => {
     if (!currentCompany.id) return;
     try {
-      const res = await fetch(`/api/assets/depreciation?companyId=${currentCompany.id}&month=${selectedMonth}`);
+      const res = await fetchWithRetry(`/api/assets/depreciation?companyId=${currentCompany.id}&month=${selectedMonth}`);
       const data = await safeJson<DepreciationSummary>(res);
       if (data) {
         setDepreciationSummary(data);
       }
     } catch (err) {
-      console.error('Error fetching depreciation:', err);
+      console.warn('Could not fetch depreciation right now:', err);
     }
-  }, [currentCompany.id, selectedMonth]);
+  }, [currentCompany.id, selectedMonth, fetchWithRetry]);
 
   // 4. Fetch Converted Statements
   const fetchStatements = useCallback(async () => {
     if (!currentCompany.id) return;
     try {
-      const res = await fetch(`/api/ofx/history?companyId=${currentCompany.id}`);
+      const res = await fetchWithRetry(`/api/ofx/history?companyId=${currentCompany.id}`);
       const data = await safeJson<ConvertedStatement[]>(res);
       if (data && Array.isArray(data)) {
         setStatements(data);
       }
     } catch (err) {
-      console.error('Error fetching statements:', err);
+      console.warn('Could not fetch statements right now:', err);
     }
-  }, [currentCompany.id]);
+  }, [currentCompany.id, fetchWithRetry]);
 
   // Initial load
   useEffect(() => {
@@ -260,8 +295,10 @@ export default function App() {
       setLoading(false);
     };
     init();
+  }, [fetchCompaniesAndUsers]);
 
-    // Listen to Firebase Authentication state
+  // Listen to Firebase Authentication state once on mount
+  useEffect(() => {
     const unsubscribe = subscribeToAuth(async (user) => {
       setFirebaseUser(user);
       if (user && user.email) {
@@ -273,7 +310,7 @@ export default function App() {
           name: user.displayName || user.email.split('@')[0],
           email: user.email,
           role: role as any,
-          companyId: currentCompany.id || 'comp-master',
+          companyId: currentCompanyIdRef.current || 'comp-master',
           createdAt: new Date().toISOString(),
           status: 'active',
         };
@@ -293,7 +330,8 @@ export default function App() {
     });
 
     return () => unsubscribe();
-  }, [fetchCompaniesAndUsers, currentCompany.id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Login handler with resilient multi-tier lookup (API -> cached allUsers -> localStorage -> Firestore)
   const handleLogin = async (email: string) => {
@@ -830,6 +868,23 @@ export default function App() {
                   onSelectCompany={handleSwitchCompany}
                   historyStatements={statements}
                   onRefreshHistory={fetchStatements}
+                  initialFile={pendingOfxFile}
+                  onConsumeInitialFile={() => setPendingOfxFile(null)}
+                />
+              )}
+
+              {/* 4b. Ferramentas > Arquivos (Documentos Contábeis em Kanban & Lista) */}
+              {activeTab === 'documents' && (
+                <DocumentsView
+                  currentUser={currentUser}
+                  currentCompany={currentCompany}
+                  allCompanies={allCompanies}
+                  onSelectCompany={handleSwitchCompany}
+                  onOpenInOfxConverter={(file) => {
+                    setPendingOfxFile(file);
+                    setActiveTab('ofx');
+                  }}
+                  showToast={showToast}
                 />
               )}
 

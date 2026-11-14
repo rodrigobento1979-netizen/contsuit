@@ -75,6 +75,8 @@ interface OfxConverterViewProps {
   onSelectCompany: (companyId: string) => void;
   historyStatements: ConvertedStatement[];
   onRefreshHistory: () => void;
+  initialFile?: File | null;
+  onConsumeInitialFile?: () => void;
 }
 
 export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
@@ -84,6 +86,8 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
   onSelectCompany,
   historyStatements,
   onRefreshHistory,
+  initialFile,
+  onConsumeInitialFile,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -278,6 +282,14 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
       textReader.readAsText(file);
     }
   };
+
+  useEffect(() => {
+    if (initialFile) {
+      handleFileSelect(initialFile);
+      onConsumeInitialFile?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialFile]);
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();

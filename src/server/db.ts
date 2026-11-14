@@ -143,6 +143,41 @@ export interface ChartAccount {
   updatedAt?: string;
 }
 
+export type DocumentCategory =
+  | 'extrato'
+  | 'nota_fiscal'
+  | 'guia_imposto'
+  | 'comprovante'
+  | 'folha_contrato'
+  | 'outro';
+
+export type DocumentStatus = 'pendente' | 'em_analise' | 'contabilizado';
+
+export interface CompanyDocument {
+  id: string;
+  companyId: string;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  category: DocumentCategory;
+  status: DocumentStatus;
+  competenceMonth: string; // YYYY-MM
+  documentDate?: string;
+  issuerOrBank?: string;
+  documentNumber?: string;
+  amount?: number;
+  detectedCnpj?: string;
+  summary?: string;
+  aiClassified: boolean;
+  confidence?: number;
+  notes?: string;
+  uploadedBy?: string;
+  uploadedAt: string;
+  updatedAt: string;
+  fileBase64?: string;
+  hasOriginalFile?: boolean;
+}
+
 export interface SystemData {
   users: User[];
   companies: Company[];
@@ -151,6 +186,7 @@ export interface SystemData {
   fees: FeeContract[];
   payments: FeePaymentRecord[];
   accounts: ChartAccount[];
+  documents: CompanyDocument[];
 }
 
 const isVercel = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
@@ -191,6 +227,7 @@ const INITIAL_DATA: SystemData = {
   statements: [],
   fees: [],
   payments: [],
+  documents: [],
   accounts: [
     { id: 'acc-1', companyId: 'comp-master', code: '1.1.1.02.0001', name: 'Banco Itaú Unibanco S/A c/c', type: 'analitica', nature: 'devedora', group: 'ativo', categoryTag: 'banco', level: 5, createdAt: '2026-01-01T08:00:00.000Z' },
     { id: 'acc-2', companyId: 'comp-master', code: '1.1.1.02.0002', name: 'Banco Bradesco S/A c/c', type: 'analitica', nature: 'devedora', group: 'ativo', categoryTag: 'banco', level: 5, createdAt: '2026-01-01T08:00:00.000Z' },
@@ -247,6 +284,7 @@ export function loadDb(): SystemData {
         fees: parsed.fees || INITIAL_DATA.fees,
         payments: parsed.payments || INITIAL_DATA.payments,
         accounts: parsed.accounts || INITIAL_DATA.accounts,
+        documents: parsed.documents || INITIAL_DATA.documents,
       };
       return memoryDb;
     }
@@ -617,6 +655,7 @@ export function getDatabaseStats() {
       fees: db.fees.length,
       payments: db.payments.length,
       accounts: db.accounts.length,
+      documents: (db.documents || []).length,
     },
   };
 }
@@ -651,6 +690,7 @@ export function restoreBackup(payload: any) {
     fees: dataToRestore.fees || [],
     payments: dataToRestore.payments || [],
     accounts: dataToRestore.accounts || [],
+    documents: dataToRestore.documents || [],
   };
 
   saveDb(restored);
@@ -665,6 +705,7 @@ export function restoreBackup(payload: any) {
       fees: restored.fees.length,
       payments: restored.payments.length,
       accounts: restored.accounts.length,
+      documents: restored.documents.length,
     },
   };
 }
@@ -714,6 +755,7 @@ export function clearDemoData(adminEmail: string = 'rodrigobento1979@gmail.com')
     fees: [],
     payments: [],
     accounts: db.accounts && db.accounts.length > 0 ? db.accounts : INITIAL_DATA.accounts,
+    documents: [],
   };
 
   saveDb(cleaned);
@@ -727,7 +769,70 @@ export function clearDemoData(adminEmail: string = 'rodrigobento1979@gmail.com')
       assets: 0,
       statements: 0,
       fees: 0,
+      documents: 0,
     },
   };
 }
+
+// ---------------------------------------------------------
+// ARQUIVOS & DOCUMENTOS CONTÁBEIS (COMPANY DOCUMENTS)
+// ---------------------------------------------------------
+export function getDocuments(companyId?: string) {
+  const db = loadDb();
+  const docs = db.documents || [];
+  if (companyId && companyId !== 'all') {
+    return docs.filter(d => d.companyId === companyId);
+  }
+  return docs;
+}
+
+export function getDocumentById(id: string) {
+  const db = loadDb();
+  return (db.documents || []).find(d => d.id === id);
+}
+
+export function createDocument(doc: Omit<CompanyDocument, 'id' | 'uploadedAt' | 'updatedAt'>) {
+  const db = loadDb();
+  if (!db.documents) db.documents = [];
+  const now = new Date().toISOString();
+  const newDoc: CompanyDocument = {
+    ...doc,
+    id: 'doc-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 10000),
+    uploadedAt: now,
+    updatedAt: now,
+  };
+  db.documents.unshift(newDoc);
+  saveDb(db);
+  return newDoc;
+}
+
+export function updateDocument(id: string, updates: Partial<CompanyDocument>) {
+  const db = loadDb();
+  if (!db.documents) db.documents = [];
+  const idx = db.documents.findIndex(d => d.id === id);
+  if (idx !== -1) {
+    db.documents[idx] = {
+      ...db.documents[idx],
+      ...updates,
+      id: db.documents[idx].id,
+      updatedAt: new Date().toISOString(),
+    };
+    saveDb(db);
+    return db.documents[idx];
+  }
+  return null;
+}
+
+export function deleteDocument(id: string) {
+  const db = loadDb();
+  if (!db.documents) return false;
+  const initialLen = db.documents.length;
+  db.documents = db.documents.filter(d => d.id !== id);
+  if (db.documents.length !== initialLen) {
+    saveDb(db);
+    return true;
+  }
+  return false;
+}
+
 

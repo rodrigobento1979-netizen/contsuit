@@ -221,5 +221,41 @@ export interface ChartAccount {
   updatedAt?: string;
 }
 
+export type DocumentCategory =
+  | 'extrato'
+  | 'nota_fiscal'
+  | 'guia_imposto'
+  | 'comprovante'
+  | 'folha_contrato'
+  | 'outro';
+
+export type DocumentStatus = 'pendente' | 'em_analise' | 'contabilizado';
+
+export interface CompanyDocument {
+  id: string;
+  companyId: string;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  category: DocumentCategory;
+  status: DocumentStatus;
+  competenceMonth: string; // YYYY-MM
+  documentDate?: string; // YYYY-MM-DD
+  issuerOrBank?: string;
+  documentNumber?: string;
+  amount?: number;
+  detectedCnpj?: string;
+  summary?: string;
+  aiClassified: boolean;
+  confidence?: number;
+  notes?: string;
+  uploadedBy?: string;
+  uploadedAt: string;
+  updatedAt: string;
+  fileBase64?: string;
+  hasOriginalFile?: boolean;
+}
+
+
 
 
