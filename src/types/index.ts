@@ -19,7 +19,7 @@ export interface Company {
   fantasyName: string;
   contactEmail: string;
   phone: string;
-  accountingSystem: 'ng_keevo' | 'dominio' | 'questor' | 'fortes' | 'alterdata' | 'totvs' | 'sci' | 'outro';
+  accountingSystem: 'keevo' | 'ng_keevo' | 'dominio' | 'questor' | 'fortes' | 'alterdata' | 'totvs' | 'sci' | 'outro';
   chartOfAccounts?: {
     assetDefaultAccount: string;
     depreciationExpenseAccount: string;
@@ -27,6 +27,9 @@ export interface Company {
   };
   adminEmail?: string; // Administrador proprietário do escritório
   adminName?: string;
+  createdByUserId?: string;
+  createdByEmail?: string;
+  createdByName?: string;
   createdAt: string;
 }
 
@@ -175,6 +178,7 @@ export interface ConvertedStatement {
   hasOriginalFile?: boolean;
   totalPages?: number;
   pagesProcessed?: number;
+  sourceDocId?: string;
 }
 
 export interface FeeContract {
@@ -229,7 +233,11 @@ export type DocumentCategory =
   | 'folha_contrato'
   | 'outro';
 
-export type DocumentStatus = 'pendente' | 'em_analise' | 'contabilizado';
+export type DocumentStatus = 'pendente' | 'em_analise' | 'contabilizado' | 'concluido';
+
+export type DocumentOfxStatus = 'idle' | 'queued' | 'processing' | 'done' | 'error';
+
+export type OfxAgentScheduleMode = 'on_upload' | 'hourly' | 'daily';
 
 export interface CompanyDocument {
   id: string;
@@ -254,6 +262,10 @@ export interface CompanyDocument {
   updatedAt: string;
   fileBase64?: string;
   hasOriginalFile?: boolean;
+  ofxStatus?: DocumentOfxStatus;
+  ofxStatementId?: string;
+  ofxError?: string;
+  sourceGroupLabel?: string;
 }
 
 

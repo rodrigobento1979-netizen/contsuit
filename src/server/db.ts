@@ -21,7 +21,7 @@ export interface Company {
   fantasyName: string;
   contactEmail: string;
   phone: string;
-  accountingSystem: 'dominio' | 'questor' | 'fortes' | 'alterdata' | 'totvs' | 'sci' | 'outro';
+  accountingSystem: 'keevo' | 'ng_keevo' | 'dominio' | 'questor' | 'fortes' | 'alterdata' | 'totvs' | 'sci' | 'outro';
   chartOfAccounts?: {
     assetDefaultAccount: string;
     depreciationExpenseAccount: string;
@@ -29,6 +29,9 @@ export interface Company {
   };
   adminEmail?: string;
   adminName?: string;
+  createdByUserId?: string;
+  createdByEmail?: string;
+  createdByName?: string;
   createdAt: string;
 }
 
@@ -97,6 +100,7 @@ export interface ConvertedStatement {
   hasOriginalFile?: boolean;
   totalPages?: number;
   pagesProcessed?: number;
+  sourceDocId?: string;
 }
 
 export interface FeeContract {
@@ -151,7 +155,7 @@ export type DocumentCategory =
   | 'folha_contrato'
   | 'outro';
 
-export type DocumentStatus = 'pendente' | 'em_analise' | 'contabilizado';
+export type DocumentStatus = 'pendente' | 'em_analise' | 'contabilizado' | 'concluido';
 
 export interface CompanyDocument {
   id: string;
@@ -176,6 +180,10 @@ export interface CompanyDocument {
   updatedAt: string;
   fileBase64?: string;
   hasOriginalFile?: boolean;
+  ofxStatus?: 'idle' | 'queued' | 'processing' | 'done' | 'error';
+  ofxStatementId?: string;
+  ofxError?: string;
+  sourceGroupLabel?: string;
 }
 
 export interface SystemData {
@@ -341,6 +349,44 @@ export function updateCompany(id: string, updates: Partial<Company>) {
     return db.companies[idx];
   }
   return null;
+}
+
+export function upsertCompany(company: Partial<Company> & { id: string }) {
+  const db = loadDb();
+  const idx = db.companies.findIndex(c => c.id === company.id);
+  if (idx !== -1) {
+    db.companies[idx] = {
+      ...db.companies[idx],
+      ...company,
+      id: db.companies[idx].id,
+      createdAt: db.companies[idx].createdAt,
+    };
+    saveDb(db);
+    return db.companies[idx];
+  }
+  const created: Company = {
+    id: company.id,
+    name: company.name || company.fantasyName || 'Empresa Cadastrada',
+    cnpj: company.cnpj || '00.000.000/0001-00',
+    fantasyName: company.fantasyName || company.name || 'Empresa',
+    contactEmail: company.contactEmail || '',
+    phone: company.phone || '',
+    accountingSystem: company.accountingSystem || 'dominio',
+    chartOfAccounts: company.chartOfAccounts || {
+      assetDefaultAccount: '1.2.3.01.0001',
+      depreciationExpenseAccount: '3.1.2.04.0010',
+      accumulatedDepreciationAccount: '1.2.3.09.0001',
+    },
+    adminEmail: company.adminEmail || 'rodrigobento1979@gmail.com',
+    adminName: company.adminName || 'Rodrigo Bento',
+    createdByUserId: company.createdByUserId,
+    createdByEmail: company.createdByEmail,
+    createdByName: company.createdByName,
+    createdAt: company.createdAt || new Date().toISOString(),
+  };
+  db.companies.push(created);
+  saveDb(db);
+  return created;
 }
 
 export function getUsers() {

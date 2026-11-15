@@ -198,3 +198,130 @@ export async function sendEmail({
     };
   }
 }
+
+export interface InboxImapConfig {
+  enabled: boolean;
+  host: string;
+  port: number;
+  secure: boolean;
+  user: string;
+  pass: string;
+  pollIntervalSeconds: number;
+  autoTriggerOfx: boolean;
+  lastCheckedAt?: string;
+  lastStatus?: 'idle' | 'ok' | 'error';
+  lastMessage?: string;
+  lastImportedCount?: number;
+  totalImportedCount?: number;
+}
+
+const INBOX_SETTINGS_FILE = path.join(DATA_DIR, 'inbox_settings.json');
+const PROCESSED_EMAILS_FILE = path.join(DATA_DIR, 'processed_email_uids.json');
+
+export function getInboxConfig(): InboxImapConfig {
+  const envHost = process.env.IMAP_HOST;
+  const envUser = process.env.IMAP_USER;
+  const envPass = process.env.IMAP_PASS;
+
+  if (envHost && envUser && envPass) {
+    const port = Number(process.env.IMAP_PORT) || 993;
+    return {
+      enabled: process.env.IMAP_ENABLED !== 'false',
+      host: envHost,
+      port,
+      secure: process.env.IMAP_SECURE !== 'false' && port !== 143,
+      user: envUser,
+      pass: envPass,
+      pollIntervalSeconds: Number(process.env.IMAP_POLL_SECONDS) || 60,
+      autoTriggerOfx: true,
+    };
+  }
+
+  try {
+    if (fs.existsSync(INBOX_SETTINGS_FILE)) {
+      const raw = fs.readFileSync(INBOX_SETTINGS_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        return {
+          enabled: parsed.enabled !== false && Boolean(parsed.pass),
+          host: parsed.host || 'imap.gmail.com',
+          port: Number(parsed.port) || 993,
+          secure: parsed.secure !== false,
+          user: parsed.user || 'contsuitesistemas@gmail.com',
+          pass: parsed.pass || '',
+          pollIntervalSeconds: Number(parsed.pollIntervalSeconds) || 60,
+          autoTriggerOfx: parsed.autoTriggerOfx !== false,
+          lastCheckedAt: parsed.lastCheckedAt,
+          lastStatus: parsed.lastStatus || 'idle',
+          lastMessage: parsed.lastMessage,
+          lastImportedCount: parsed.lastImportedCount || 0,
+          totalImportedCount: parsed.totalImportedCount || 0,
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('Could not read inbox_settings.json:', err);
+  }
+
+  // Fallback convenience: if SMTP already saved credentials for contsuitesistemas@gmail.com, prefill user/pass
+  const smtp = getSmtpConfig();
+  const smtpMatchesTarget =
+    smtp && smtp.user && smtp.user.toLowerCase().trim() === 'contsuitesistemas@gmail.com';
+
+  return {
+    enabled: Boolean(smtpMatchesTarget && smtp?.pass),
+    host: 'imap.gmail.com',
+    port: 993,
+    secure: true,
+    user: 'contsuitesistemas@gmail.com',
+    pass: smtpMatchesTarget ? smtp!.pass : '',
+    pollIntervalSeconds: 60,
+    autoTriggerOfx: true,
+    lastStatus: 'idle',
+    lastImportedCount: 0,
+    totalImportedCount: 0,
+  };
+}
+
+export function saveInboxConfig(config: InboxImapConfig): InboxImapConfig {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(INBOX_SETTINGS_FILE, JSON.stringify(config, null, 2), 'utf-8');
+    return config;
+  } catch (err) {
+    console.error('Failed to save inbox settings:', err);
+    throw new Error('Falha ao gravar configurações de recebimento de e-mail no disco.');
+  }
+}
+
+export function getProcessedEmailKeys(): Set<string> {
+  try {
+    if (fs.existsSync(PROCESSED_EMAILS_FILE)) {
+      const raw = fs.readFileSync(PROCESSED_EMAILS_FILE, 'utf-8');
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) {
+        return new Set(arr.map(String));
+      }
+    }
+  } catch {}
+  return new Set<string>();
+}
+
+export function markEmailKeysProcessed(keys: string[]): void {
+  if (!keys.length) return;
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    const existing = getProcessedEmailKeys();
+    keys.forEach((k) => existing.add(k));
+    // Keep last 5000 keys bounded
+    const list = Array.from(existing).slice(-5000);
+    fs.writeFileSync(PROCESSED_EMAILS_FILE, JSON.stringify(list, null, 2), 'utf-8');
+  } catch (err) {
+    console.warn('Could not persist processed email keys:', err);
+  }
+}
+

@@ -184,8 +184,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               <h2 className="text-2xl sm:text-3xl font-extrabold text-[#0f2e2e] tracking-tight">
                 Acesse Sua Conta
               </h2>
-              <p className="text-xs sm:text-sm text-slate-500 mt-1 font-medium">
-                Bem-vindo ao <span className="text-teal-700 font-bold">ContSuite</span>
+              <p className="text-xs sm:text-sm text-slate-500 mt-1 font-medium flex items-center gap-2">
+                <span>Bem-vindo ao <span className="text-teal-700 font-bold">ContSuite</span></span>
+                <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-teal-50 text-teal-700 border border-teal-200">
+                  v1.0
+                </span>
               </p>
             </div>
 

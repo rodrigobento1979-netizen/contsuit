@@ -70,7 +70,7 @@ export const Header: React.FC<HeaderProps> = ({
                 {currentInfo.title}
               </h2>
               <span className="hidden sm:inline-block text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-white/15 text-[#e0f2f1] border border-white/20">
-                ContSuite
+                ContSuite v1.0
               </span>
             </div>
             <p className="text-[11px] text-[#b2dfdb] hidden sm:block">
@@ -81,18 +81,21 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Right: Company Switcher, Cloud Status & User Session */}
         <div className="flex items-center gap-3 text-xs">
-          {/* Active Company Selector (for Admin) */}
-          {isAdmin && (
-            <div className="flex items-center gap-1.5 bg-black/20 px-2.5 py-1 rounded-xl border border-white/15">
+          {/* Active Company Selector (for Admin / Accountant - Broad Access) */}
+          {(isAdmin || currentUser.role === 'accountant' || currentUser.email.toLowerCase().trim() === 'rodrigobento1979@gmail.com') && (
+            <div
+              className="flex items-center gap-1.5 bg-black/20 px-2.5 py-1 rounded-xl border border-white/15"
+              title={`Acesso amplo Administrador Master: ${allCompanies.length} empresas disponíveis`}
+            >
               <Building2 className="w-3.5 h-3.5 text-[#80cbc4]" />
               <label htmlFor="top-company-select" className="text-[#e0f2f1] font-medium hidden md:inline text-[11px]">
-                Empresa:
+                Empresa ({allCompanies.length}):
               </label>
               <select
                 id="top-company-select"
                 value={currentCompany?.id || ''}
                 onChange={(e) => onSwitchCompany(e.target.value)}
-                className="bg-[#004d40] text-white font-bold border border-[#00bfa5]/40 rounded-lg px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-[#80cbc4] cursor-pointer"
+                className="bg-[#004d40] text-white font-bold border border-[#00bfa5]/40 rounded-lg px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-[#80cbc4] cursor-pointer max-w-[210px]"
               >
                 {allCompanies.map((c) => (
                   <option key={c.id} value={c.id} className="bg-slate-900 text-white">

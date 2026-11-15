@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   FolderOpen,
+  FolderUp,
   Upload,
   Search,
   Sparkles,
@@ -23,20 +24,42 @@ import {
   Kanban,
   RefreshCw,
   Calendar,
+  Archive,
+  Bot,
+  Play,
+  AlertCircle,
+  Maximize2,
+  Minimize2,
+  Mail,
 } from 'lucide-react';
 import { PDFDocument } from 'pdf-lib';
 import {
   Company,
   CompanyDocument,
+  ConvertedStatement,
   DocumentCategory,
+  DocumentOfxStatus,
   DocumentStatus,
+  OfxAgentScheduleMode,
   User,
 } from '../types';
 import {
   fetchDocumentsFromFirestore,
   saveDocumentToFirestore,
   deleteDocumentFromFirestore,
+  fetchStatementsFromFirestore,
 } from '../firebase/service';
+import {
+  base64ToBlob,
+  base64ToUint8Array,
+  cleanBase64,
+  deleteBlobFromIdb,
+  getBlobFromIdb,
+  saveBlobToIdb,
+} from '../utils/fileStorage';
+import { splitAndClassifyPdfFile } from '../utils/pdfSplitter';
+import { PdfCanvasViewer } from './PdfCanvasViewer';
+import { useOfxAgent } from '../context/OfxAgentContext';
 
 interface DocumentsViewProps {
   currentUser: User;
@@ -144,73 +167,14 @@ const STATUS_COLUMNS: {
     dotColor: 'bg-emerald-600',
     textColor: 'text-emerald-700',
   },
+  {
+    id: 'concluido',
+    label: 'Concluído / Arquivado',
+    description: 'Processo finalizado e arquivado definitivamente',
+    dotColor: 'bg-teal-600',
+    textColor: 'text-teal-800',
+  },
 ];
-
-// Lightweight IndexedDB binary cache so preview/download also works offline or across cold starts
-const IDB_NAME = 'contsuite_documents_db';
-const IDB_STORE = 'file_blobs';
-
-function openBlobDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    if (typeof indexedDB === 'undefined') {
-      reject(new Error('IndexedDB unavailable'));
-      return;
-    }
-    const req = indexedDB.open(IDB_NAME, 1);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(IDB_STORE)) {
-        db.createObjectStore(IDB_STORE);
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function saveBlobToIdb(docId: string, base64: string): Promise<void> {
-  try {
-    const db = await openBlobDb();
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(IDB_STORE, 'readwrite');
-      tx.objectStore(IDB_STORE).put(base64, docId);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-    db.close();
-  } catch {
-    // Ignore IDB quota/availability errors gracefully
-  }
-}
-
-async function getBlobFromIdb(docId: string): Promise<string | null> {
-  try {
-    const db = await openBlobDb();
-    const res = await new Promise<string | null>((resolve, reject) => {
-      const tx = db.transaction(IDB_STORE, 'readonly');
-      const req = tx.objectStore(IDB_STORE).get(docId);
-      req.onsuccess = () => resolve((req.result as string) || null);
-      req.onerror = () => reject(req.error);
-    });
-    db.close();
-    return res;
-  } catch {
-    return null;
-  }
-}
-
-async function deleteBlobFromIdb(docId: string): Promise<void> {
-  try {
-    const db = await openBlobDb();
-    await new Promise<void>((resolve) => {
-      const tx = db.transaction(IDB_STORE, 'readwrite');
-      tx.objectStore(IDB_STORE).delete(docId);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
-    });
-    db.close();
-  } catch {}
-}
 
 function formatFileSize(bytes: number): string {
   if (!bytes || bytes <= 0) return '0 KB';
@@ -222,15 +186,6 @@ function formatFileSize(bytes: number): string {
 function formatCurrency(val?: number): string {
   if (val === undefined || val === null || isNaN(val)) return '';
   return val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-}
-
-function base64ToBlob(base64: string, mimeType: string): Blob {
-  const byteChars = atob(base64);
-  const bytes = new Uint8Array(byteChars.length);
-  for (let i = 0; i < byteChars.length; i++) {
-    bytes[i] = byteChars.charCodeAt(i);
-  }
-  return new Blob([bytes], { type: mimeType || 'application/octet-stream' });
 }
 
 function getFileIcon(mimeType: string, fileName: string) {
@@ -338,6 +293,32 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const isAdmin = currentUser.role === 'admin';
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const {
+    autoRunEnabled,
+    scheduleMode,
+    lastSweepAt,
+    nextSweepAt,
+    setAutoRunEnabled,
+    setScheduleMode,
+    isSweeping,
+    isProcessingOtherDocs,
+    activeQueueCount,
+    activeDocProcessCount,
+    docJobs,
+    docProcessJobs,
+    enqueueDocumentForOfx,
+    enqueueNonExtratoProcessing,
+    runPendingSweep,
+    runPendingNonExtratoSweep,
+    lastDocumentPatch,
+    recentStatements,
+    inboxConfigured,
+    inboxEmailAddress,
+    isSyncingInbox,
+    lastInboxSyncEventTs,
+    syncEmailInboxNow,
+  } = useOfxAgent();
+
   const [documents, setDocuments] = useState<CompanyDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>('kanban_category');
@@ -365,9 +346,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null);
   const [previewTextContent, setPreviewTextContent] = useState<string | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
+  const [isPreviewExpanded, setIsPreviewExpanded] = useState(false);
   const [savingDetail, setSavingDetail] = useState(false);
   const [reclassifying, setReclassifying] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const reattachInputRef = useRef<HTMLInputElement>(null);
 
   // Editable detail fields
   const [editDraft, setEditDraft] = useState<{
@@ -436,6 +419,51 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     loadDocuments();
   }, [loadDocuments]);
 
+  useEffect(() => {
+    if (lastInboxSyncEventTs > 0) {
+      void loadDocuments();
+    }
+  }, [lastInboxSyncEventTs, loadDocuments]);
+
+  // Sync live OFX agent updates into documents list & cache
+  useEffect(() => {
+    if (!lastDocumentPatch) return;
+    setDocuments((prev) => {
+      const idx = prev.findIndex((d) => d.id === lastDocumentPatch.docId);
+      if (idx === -1) return prev;
+      const next = prev.map((d) =>
+        d.id === lastDocumentPatch.docId ? { ...d, ...lastDocumentPatch.patch } : d
+      );
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify(next.map(({ fileBase64, ...rest }) => rest)));
+      } catch {}
+      return next;
+    });
+    setSelectedDoc((prev) =>
+      prev && prev.id === lastDocumentPatch.docId ? { ...prev, ...lastDocumentPatch.patch } : prev
+    );
+    if (selectedDoc?.id === lastDocumentPatch.docId) {
+      const p = lastDocumentPatch.patch;
+      setEditDraft((prev) =>
+        prev
+          ? {
+              ...prev,
+              category: p.category || prev.category,
+              status: p.status || prev.status,
+              competenceMonth: p.competenceMonth || prev.competenceMonth,
+              documentDate: p.documentDate !== undefined ? p.documentDate : prev.documentDate,
+              issuerOrBank: p.issuerOrBank !== undefined ? p.issuerOrBank : prev.issuerOrBank,
+              documentNumber:
+                p.documentNumber !== undefined ? p.documentNumber : prev.documentNumber,
+              amount: p.amount !== undefined ? String(p.amount) : prev.amount,
+              detectedCnpj: p.detectedCnpj !== undefined ? p.detectedCnpj : prev.detectedCnpj,
+              notes: p.notes !== undefined ? p.notes : prev.notes,
+            }
+          : prev
+      );
+    }
+  }, [lastDocumentPatch, cacheKey, selectedDoc?.id]);
+
   // Helper to update local + cache state cleanly
   const persistCacheList = useCallback(
     (list: CompanyDocument[]) => {
@@ -487,7 +515,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     const total = filteredDocs.length;
     const aiCount = filteredDocs.filter((d) => d.aiClassified).length;
     const pendingCount = filteredDocs.filter((d) => d.status === 'pendente').length;
-    const doneCount = filteredDocs.filter((d) => d.status === 'contabilizado').length;
+    const doneCount = filteredDocs.filter(
+      (d) => d.status === 'contabilizado' || d.status === 'concluido'
+    ).length;
     return { total, aiCount, pendingCount, doneCount };
   }, [filteredDocs]);
 
@@ -503,13 +533,46 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       reader.readAsDataURL(file);
     });
 
-  // Upload & classify batch of files
+  // Upload & classify batch of files (with automatic mixed-PDF splitting + Auto OFX Agent)
   const handleFilesUpload = async (fileList: FileList | File[]) => {
     const files = Array.from(fileList || []);
     if (files.length === 0) return;
 
     setUploadingQueue({ total: files.length, completed: 0, currentFileName: files[0].name });
-    let successCount = 0;
+    let createdCardsCount = 0;
+    let splitFilesCount = 0;
+    let triggeredOfxCount = 0;
+
+    const persistCreatedCard = async (
+      savedDoc: CompanyDocument,
+      binaryBase64: string
+    ) => {
+      await saveBlobToIdb(savedDoc.id, binaryBase64);
+      savedDoc.hasOriginalFile = true;
+
+      try {
+        await saveDocumentToFirestore(currentCompany.id, savedDoc);
+      } catch (fErr) {
+        console.warn('Firestore save document warning:', fErr);
+      }
+
+      setDocuments((prev) => {
+        const next = [savedDoc, ...prev.filter((d) => d.id !== savedDoc.id)];
+        persistCacheList(next);
+        return next;
+      });
+      createdCardsCount++;
+
+      // Automatic OFX Agent trigger for bank statements on upload
+      if (
+        autoRunEnabled &&
+        scheduleMode === 'on_upload' &&
+        savedDoc.category === 'extrato'
+      ) {
+        enqueueDocumentForOfx(savedDoc, binaryBase64);
+        triggeredOfxCount++;
+      }
+    };
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
@@ -517,10 +580,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
       try {
         const fullBase64 = await readFileBase64(file);
-        const { classificationBase64, textPreview } = await prepareClassificationPayload(file, fullBase64);
-
-        // Keep API payload safely under Vercel 4.5MB limit
-        const sendFullFile = fullBase64.length <= 3_300_000 ? fullBase64 : undefined;
         const mimeType =
           file.type ||
           (file.name.toLowerCase().endsWith('.pdf')
@@ -528,6 +587,94 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             : file.name.toLowerCase().endsWith('.xml')
               ? 'application/xml'
               : 'application/octet-stream');
+
+        const isPdf = mimeType === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+
+        // Step 1: For multi-page PDFs, analyze page-by-page and ALWAYS separate extratos from receipts/other docs
+        if (isPdf) {
+          const splitResult = await splitAndClassifyPdfFile(file, fullBase64, (statusText) => {
+            setUploadingQueue({
+              total: files.length,
+              completed: i,
+              currentFileName: `${file.name} — ${statusText}`,
+            });
+          });
+
+          if (splitResult && splitResult.groups.length > 0) {
+            if (splitResult.wasSplit) splitFilesCount++;
+
+            for (const grp of splitResult.groups) {
+              const sendGroupB64 = grp.base64.length <= 3_300_000 ? grp.base64 : undefined;
+              const willAutoOfx =
+                autoRunEnabled && scheduleMode === 'on_upload' && grp.category === 'extrato';
+
+              const res = await fetch('/api/documents', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  companyId: currentCompany.id,
+                  fileName: grp.fileName,
+                  mimeType: 'application/pdf',
+                  fileSize: grp.fileSize,
+                  fileBase64: sendGroupB64,
+                  category: grp.category,
+                  competenceMonth: grp.competenceMonth,
+                  documentDate: grp.documentDate,
+                  issuerOrBank: grp.issuerOrBank,
+                  documentNumber: grp.documentNumber,
+                  amount: grp.amount,
+                  detectedCnpj: grp.detectedCnpj,
+                  summary: grp.summary,
+                  aiClassified: grp.aiClassified,
+                  confidence: grp.aiClassified ? 94 : 80,
+                  sourceGroupLabel: grp.groupLabel,
+                  ofxStatus: willAutoOfx ? 'queued' : undefined,
+                  uploadedBy: currentUser.email,
+                  autoClassify: false,
+                }),
+              });
+
+              let savedDoc: CompanyDocument | null = null;
+              if (res.ok && (res.headers.get('content-type') || '').includes('application/json')) {
+                savedDoc = await res.json();
+              } else {
+                const now = new Date().toISOString();
+                savedDoc = {
+                  id: 'doc-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 10000),
+                  companyId: currentCompany.id,
+                  fileName: grp.fileName.slice(0, 200),
+                  mimeType: 'application/pdf',
+                  fileSize: grp.fileSize,
+                  category: grp.category,
+                  status: 'pendente',
+                  competenceMonth: grp.competenceMonth || now.slice(0, 7),
+                  documentDate: grp.documentDate,
+                  issuerOrBank: grp.issuerOrBank,
+                  documentNumber: grp.documentNumber,
+                  amount: grp.amount,
+                  detectedCnpj: grp.detectedCnpj,
+                  summary: grp.summary,
+                  aiClassified: grp.aiClassified,
+                  sourceGroupLabel: grp.groupLabel,
+                  ofxStatus: willAutoOfx ? 'queued' : undefined,
+                  uploadedBy: currentUser.email,
+                  uploadedAt: now,
+                  updatedAt: now,
+                  hasOriginalFile: true,
+                };
+              }
+
+              if (savedDoc) {
+                await persistCreatedCard(savedDoc, grp.base64);
+              }
+            }
+            continue;
+          }
+        }
+
+        // Step 2: Single-page PDF or non-PDF upload path
+        const { classificationBase64, textPreview } = await prepareClassificationPayload(file, fullBase64);
+        const sendFullFile = fullBase64.length <= 3_300_000 ? fullBase64 : undefined;
 
         const res = await fetch('/api/documents', {
           method: 'POST',
@@ -549,7 +696,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         if (res.ok && (res.headers.get('content-type') || '').includes('application/json')) {
           savedDoc = await res.json();
         } else {
-          // Offline/fallback record creation if server rejected large payload or temporarily errored
           const now = new Date().toISOString();
           savedDoc = {
             id: 'doc-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 10000),
@@ -570,23 +716,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         }
 
         if (savedDoc) {
-          // Always save original binary in browser IndexedDB for guaranteed local preview & download
-          await saveBlobToIdb(savedDoc.id, fullBase64);
-          savedDoc.hasOriginalFile = true;
-
-          // Sync metadata to Firestore
-          try {
-            await saveDocumentToFirestore(currentCompany.id, savedDoc);
-          } catch (fErr) {
-            console.warn('Firestore save document warning:', fErr);
-          }
-
-          setDocuments((prev) => {
-            const next = [savedDoc!, ...prev.filter((d) => d.id !== savedDoc!.id)];
-            persistCacheList(next);
-            return next;
-          });
-          successCount++;
+          await persistCreatedCard(savedDoc, fullBase64);
         }
       } catch (err: any) {
         showToast(`Erro ao processar "${file.name}": ${err?.message || 'falha'}`, 'error');
@@ -594,12 +724,16 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     }
 
     setUploadingQueue(null);
-    if (successCount > 0) {
-      showToast(
-        successCount === 1
-          ? 'Arquivo enviado e classificado automaticamente!'
-          : `${successCount} arquivos enviados e classificados automaticamente!`
-      );
+    if (createdCardsCount > 0) {
+      const splitSuffix =
+        splitFilesCount > 0
+          ? ` (${createdCardsCount} cards criados com separação automática de extratos e recibos)`
+          : '';
+      const ofxSuffix =
+        triggeredOfxCount > 0
+          ? ` • Agente OFX iniciado automaticamente para ${triggeredOfxCount} extrato(s).`
+          : '';
+      showToast(`Importação concluída!${splitSuffix}${ofxSuffix}`);
     }
   };
 
@@ -684,29 +818,85 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     showToast('Arquivo removido com sucesso.');
   };
 
-  // Fetch file binary (IndexedDB -> API)
+  const isPdfDoc = (docItem: CompanyDocument) =>
+    docItem.mimeType === 'application/pdf' || docItem.fileName.toLowerCase().endsWith('.pdf');
+
+  const isImageDoc = (docItem: CompanyDocument) =>
+    (docItem.mimeType || '').startsWith('image/') ||
+    /\.(png|jpe?g|webp|gif|bmp)$/i.test(docItem.fileName || '');
+
+  const getEffectiveImageMime = (docItem: CompanyDocument) => {
+    if ((docItem.mimeType || '').startsWith('image/')) return docItem.mimeType;
+    const lower = (docItem.fileName || '').toLowerCase();
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.gif')) return 'image/gif';
+    return 'image/jpeg';
+  };
+
+  // Fetch file binary (In-memory -> IndexedDB -> API)
   const resolveFileBase64 = async (docItem: CompanyDocument): Promise<string | null> => {
-    if (docItem.fileBase64) return docItem.fileBase64;
+    if (docItem.fileBase64) return cleanBase64(docItem.fileBase64);
     const localB64 = await getBlobFromIdb(docItem.id);
-    if (localB64) return localB64;
+    if (localB64) return cleanBase64(localB64);
 
     try {
       const res = await fetch(`/api/documents/${docItem.id}`, { cache: 'no-store' });
       if (res.ok && (res.headers.get('content-type') || '').includes('application/json')) {
         const full = await res.json();
         if (full?.fileBase64) {
-          await saveBlobToIdb(docItem.id, full.fileBase64);
-          return full.fileBase64;
+          const cleaned = cleanBase64(full.fileBase64);
+          await saveBlobToIdb(docItem.id, cleaned);
+          return cleaned;
         }
       }
     } catch {}
     return null;
   };
 
+  const applyPreviewContent = (docItem: CompanyDocument, rawB64: string | null) => {
+    if (previewBlobUrl) {
+      URL.revokeObjectURL(previewBlobUrl);
+      setPreviewBlobUrl(null);
+    }
+    setPreviewTextContent(null);
+    const b64 = rawB64 ? cleanBase64(rawB64) : null;
+    setPreviewBase64(b64);
+
+    if (!b64) return;
+    const lower = docItem.fileName.toLowerCase();
+    const mime = (docItem.mimeType || '').toLowerCase();
+
+    if (
+      mime.startsWith('text/') ||
+      mime.includes('xml') ||
+      lower.endsWith('.xml') ||
+      lower.endsWith('.ofx') ||
+      lower.endsWith('.csv') ||
+      lower.endsWith('.txt')
+    ) {
+      try {
+        const decoded = new TextDecoder('utf-8').decode(base64ToUint8Array(b64));
+        setPreviewTextContent(decoded.slice(0, 25000));
+      } catch {}
+    } else if (isPdfDoc(docItem)) {
+      try {
+        const blob = base64ToBlob(b64, 'application/pdf');
+        setPreviewBlobUrl(URL.createObjectURL(blob));
+      } catch {}
+    } else if (isImageDoc(docItem)) {
+      try {
+        const blob = base64ToBlob(b64, getEffectiveImageMime(docItem));
+        setPreviewBlobUrl(URL.createObjectURL(blob));
+      } catch {}
+    }
+  };
+
   // Open detail modal with preview
   const openDetailModal = async (docItem: CompanyDocument) => {
     setSelectedDoc(docItem);
     setConfirmDeleteId(null);
+    setIsPreviewExpanded(false);
     setEditDraft({
       category: docItem.category,
       status: docItem.status,
@@ -728,34 +918,29 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     setLoadingPreview(true);
 
     const b64 = await resolveFileBase64(docItem);
-    setPreviewBase64(b64);
-
-    if (b64) {
-      const lower = docItem.fileName.toLowerCase();
-      const mime = docItem.mimeType || '';
-      if (
-        mime.startsWith('text/') ||
-        mime.includes('xml') ||
-        lower.endsWith('.xml') ||
-        lower.endsWith('.ofx') ||
-        lower.endsWith('.csv') ||
-        lower.endsWith('.txt')
-      ) {
-        try {
-          const decoded = new TextDecoder('utf-8').decode(
-            Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
-          );
-          setPreviewTextContent(decoded.slice(0, 20000));
-        } catch {}
-      } else if (mime === 'application/pdf' || mime.startsWith('image/') || lower.endsWith('.pdf')) {
-        try {
-          const effectiveMime = lower.endsWith('.pdf') ? 'application/pdf' : mime;
-          const blob = base64ToBlob(b64, effectiveMime);
-          setPreviewBlobUrl(URL.createObjectURL(blob));
-        } catch {}
-      }
-    }
+    applyPreviewContent(docItem, b64);
     setLoadingPreview(false);
+  };
+
+  const handleReattachFile = async (docItem: CompanyDocument, file: File) => {
+    try {
+      setLoadingPreview(true);
+      const b64 = cleanBase64(await readFileBase64(file));
+      await saveBlobToIdb(docItem.id, b64);
+      setDocuments((prev) => {
+        const next = prev.map((d) =>
+          d.id === docItem.id ? { ...d, hasOriginalFile: true } : d
+        );
+        persistCacheList(next);
+        return next;
+      });
+      applyPreviewContent(docItem, b64);
+      showToast('Arquivo vinculado localmente para pré-visualização!');
+    } catch (err: any) {
+      showToast(err?.message || 'Falha ao vincular arquivo.', 'error');
+    } finally {
+      setLoadingPreview(false);
+    }
   };
 
   const closeDetailModal = () => {
@@ -768,6 +953,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     setSelectedDoc(null);
     setEditDraft(null);
     setConfirmDeleteId(null);
+    setIsPreviewExpanded(false);
   };
 
   const handleDownloadFile = async (docItem: CompanyDocument) => {
@@ -924,10 +1110,106 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     showToast(`Status alterado para "${stLabel}".`);
   };
 
+  const handleDownloadGeneratedOfx = async (
+    statementId: string | undefined,
+    fallbackName: string,
+    docItem?: CompanyDocument
+  ) => {
+    try {
+      const findMatch = (list: ConvertedStatement[]) =>
+        list.find(
+          (s) =>
+            (statementId && s.id === statementId) ||
+            (docItem && s.sourceDocId === docItem.id)
+        );
+
+      let stmt: ConvertedStatement | undefined = findMatch(recentStatements);
+
+      if (!stmt?.ofxContent && currentCompany.id) {
+        try {
+          const raw = localStorage.getItem(`contsuite_cached_statements_${currentCompany.id}`);
+          if (raw) {
+            stmt = findMatch(JSON.parse(raw) as ConvertedStatement[]);
+          }
+        } catch {}
+      }
+
+      if (!stmt?.ofxContent && statementId) {
+        try {
+          const res = await fetch(`/api/ofx/statements/${statementId}`, { cache: 'no-store' });
+          if (res.ok) {
+            stmt = await res.json();
+          }
+        } catch {}
+      }
+
+      if (!stmt?.ofxContent && currentCompany.id) {
+        try {
+          const fStmts = await fetchStatementsFromFirestore(currentCompany.id);
+          stmt = findMatch(fStmts);
+        } catch {}
+      }
+
+      if (!stmt?.ofxContent && currentCompany.id) {
+        try {
+          const histRes = await fetch(`/api/ofx/history?companyId=${currentCompany.id}`, {
+            cache: 'no-store',
+          });
+          if (histRes.ok) {
+            const histList: ConvertedStatement[] = await histRes.json();
+            stmt = findMatch(histList);
+          }
+        } catch {}
+      }
+
+      if (!stmt?.ofxContent) {
+        throw new Error('Conteúdo OFX ainda indisponível. Clique em "Refazer" para gerar novamente.');
+      }
+
+      const blob = new Blob([stmt.ofxContent], { type: 'application/x-ofx;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${fallbackName.replace(/\.[^/.]+$/, '')}.ofx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      showToast(err?.message || 'Não foi possível baixar o arquivo OFX.', 'error');
+    }
+  };
+
+  const handleArchiveDocument = async (docItem: CompanyDocument) => {
+    await handleUpdateDocument(docItem.id, { status: 'concluido' }, true);
+    showToast(`"${docItem.fileName}" arquivado em Concluído.`);
+  };
+
   const renderDocCard = (docItem: CompanyDocument, showCategoryLabel: boolean) => {
     const Icon = getFileIcon(docItem.mimeType, docItem.fileName);
     const catMeta = CATEGORY_COLUMNS.find((c) => c.id === docItem.category) || CATEGORY_COLUMNS[5];
     const stMeta = STATUS_COLUMNS.find((s) => s.id === docItem.status) || STATUS_COLUMNS[0];
+
+    const liveJob = docJobs[docItem.id];
+    const matchedRecentStmt = recentStatements.find(
+      (s) =>
+        (docItem.ofxStatementId && s.id === docItem.ofxStatementId) ||
+        s.sourceDocId === docItem.id
+    );
+    const effectiveStatementId =
+      liveJob?.statementId || docItem.ofxStatementId || matchedRecentStmt?.id;
+    const effectiveOfxStatus: DocumentOfxStatus | undefined =
+      liveJob?.status || docItem.ofxStatus || (effectiveStatementId ? 'done' : undefined);
+    const progressPct =
+      liveJob && liveJob.totalPages > 0
+        ? Math.min(100, Math.round((liveJob.processedPages / liveJob.totalPages) * 100))
+        : 0;
+
+    const docProcJob = docProcessJobs[docItem.id];
+    const isNonExtratoProcessed =
+      docItem.category !== 'extrato' &&
+      (docProcJob?.status === 'done' ||
+        Boolean(docItem.notes && docItem.notes.includes('[Processado IA]')));
 
     return (
       <div
@@ -966,6 +1248,143 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           </div>
         </div>
 
+        {/* Separated group origin tag */}
+        {docItem.sourceGroupLabel && (
+          <div className="mt-2">
+            <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-[10px] font-semibold text-slate-700 truncate max-w-full">
+              {docItem.sourceGroupLabel}
+            </span>
+          </div>
+        )}
+
+        {/* Live Background OFX Agent Signaling */}
+        {docItem.category === 'extrato' && (effectiveOfxStatus === 'queued' || effectiveOfxStatus === 'processing') && (
+          <div className="mt-2 p-2 rounded-lg bg-teal-50 border border-teal-200 space-y-1">
+            <div className="flex items-center justify-between gap-2 text-[11px] font-bold text-teal-900">
+              <span className="flex items-center gap-1.5 truncate">
+                <Loader2 className="w-3 h-3 animate-spin text-teal-600 shrink-0" />
+                <span className="truncate">
+                  {liveJob?.statusLabel || 'Agente OFX processando...'}
+                </span>
+              </span>
+              {liveJob && liveJob.totalPages > 1 && (
+                <span className="font-mono text-[10px] text-teal-700 shrink-0">
+                  {progressPct}%
+                </span>
+              )}
+            </div>
+            {liveJob && liveJob.totalPages > 1 && (
+              <div className="w-full h-1.5 bg-teal-100 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-[#00897b] transition-all duration-300"
+                  style={{ width: `${progressPct}%` }}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
+        {docItem.category === 'extrato' && effectiveOfxStatus === 'done' && (
+          <div className="mt-2 px-2 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-between gap-1.5 flex-wrap">
+            <span className="flex items-center gap-1 text-[11px] font-bold text-emerald-800 truncate min-w-0">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              <span className="truncate">
+                {liveJob?.statusLabel || 'OFX Pronto'}
+              </span>
+            </span>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleDownloadGeneratedOfx(effectiveStatementId, docItem.fileName, docItem);
+                }}
+                className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold flex items-center gap-1 cursor-pointer shrink-0"
+                title="Baixar arquivo OFX gerado"
+              >
+                <Download className="w-3 h-3" />
+                <span>Baixar OFX</span>
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  enqueueDocumentForOfx(docItem);
+                }}
+                className="px-2 py-0.5 rounded bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold flex items-center gap-1 cursor-pointer shrink-0"
+                title="Processar e gerar OFX novamente"
+              >
+                <RefreshCw className="w-2.5 h-2.5" />
+                <span>Refazer</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {docItem.category === 'extrato' && effectiveOfxStatus === 'error' && (
+          <div className="mt-2 px-2 py-1.5 rounded-lg bg-rose-50 border border-rose-200 flex items-center justify-between gap-2">
+            <span className="flex items-center gap-1 text-[10px] font-semibold text-rose-700 truncate">
+              <AlertCircle className="w-3 h-3 shrink-0" />
+              <span className="truncate">{liveJob?.error || docItem.ofxError || 'Falha no agente OFX'}</span>
+            </span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                enqueueDocumentForOfx(docItem);
+              }}
+              className="text-[10px] font-bold text-rose-800 underline cursor-pointer shrink-0"
+            >
+              Reprocessar
+            </button>
+          </div>
+        )}
+
+        {/* Live Background Non-Extrato AI Processing Signaling */}
+        {docItem.category !== 'extrato' &&
+          (docProcJob?.status === 'queued' || docProcJob?.status === 'processing') && (
+            <div className="mt-2 p-2 rounded-lg bg-indigo-50 border border-indigo-200 flex items-center gap-1.5 text-[11px] font-bold text-indigo-900">
+              <Loader2 className="w-3 h-3 animate-spin text-indigo-600 shrink-0" />
+              <span className="truncate">{docProcJob.statusLabel}</span>
+            </div>
+          )}
+
+        {docItem.category !== 'extrato' && docProcJob?.status === 'error' && (
+          <div className="mt-2 px-2 py-1.5 rounded-lg bg-rose-50 border border-rose-200 flex items-center justify-between gap-2">
+            <span className="flex items-center gap-1 text-[10px] font-semibold text-rose-700 truncate">
+              <AlertCircle className="w-3 h-3 shrink-0" />
+              <span className="truncate">{docProcJob.error || 'Falha no processamento'}</span>
+            </span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                enqueueNonExtratoProcessing(docItem);
+              }}
+              className="text-[10px] font-bold text-rose-800 underline cursor-pointer shrink-0"
+            >
+              Tentar novamente
+            </button>
+          </div>
+        )}
+
+        {docItem.category !== 'extrato' &&
+          isNonExtratoProcessed &&
+          docProcJob?.status !== 'queued' &&
+          docProcJob?.status !== 'processing' && (
+            <div className="mt-2 px-2 py-1.5 rounded-lg bg-indigo-50/80 border border-indigo-200/80 space-y-0.5">
+              <div className="flex items-center gap-1 text-[10px] font-bold text-indigo-800">
+                <CheckCircle2 className="w-3 h-3 text-indigo-600 shrink-0" />
+                <span>Processado via IA · Dados Extraídos</span>
+              </div>
+              {docItem.notes && (
+                <p className="text-[10px] text-indigo-950/80 line-clamp-2 leading-snug">
+                  {docItem.notes.replace('[Processado IA]', '').trim()}
+                </p>
+              )}
+            </div>
+          )}
+
         {/* Optional AI summary */}
         {docItem.summary && (
           <p className="mt-2 text-[11px] text-slate-600 line-clamp-2 leading-relaxed">
@@ -993,32 +1412,151 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           )}
         </div>
 
-        {/* Contextual quick action for Bank Statements */}
-        {docItem.category === 'extrato' && onOpenInOfxConverter && (
-          <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                void handleSendToOfx(docItem);
-              }}
-              className="text-[11px] font-semibold text-teal-700 hover:text-teal-900 flex items-center gap-1 cursor-pointer whitespace-nowrap"
-            >
-              <Sparkles className="w-3 h-3" />
-              <span>Converter OFX</span>
-              <ArrowRight className="w-3 h-3" />
-            </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                void handleDownloadFile(docItem);
-              }}
-              className="text-[11px] text-slate-500 hover:text-slate-900 p-1 rounded cursor-pointer"
-              title="Baixar arquivo original"
-            >
-              <Download className="w-3.5 h-3.5" />
-            </button>
+        {/* Quick Card Footer Actions: Ver PDF, Arquivar Concluído, Download, OFX, Excluir */}
+        {confirmDeleteId === docItem.id ? (
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="mt-2 pt-2 border-t border-rose-200 bg-rose-50/90 -mx-1 px-2 py-1.5 rounded-lg flex items-center justify-between gap-2"
+          >
+            <span className="text-[11px] font-semibold text-rose-800 truncate">
+              Excluir este arquivo?
+            </span>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleDeleteDocument(docItem.id);
+                }}
+                className="px-2 py-0.5 rounded bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold cursor-pointer"
+              >
+                Excluir
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setConfirmDeleteId(null);
+                }}
+                className="px-2 py-0.5 rounded bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-[10px] font-medium cursor-pointer"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between gap-1.5">
+            <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void openDetailModal(docItem);
+                }}
+                className="text-[11px] font-bold text-orange-700 hover:text-orange-900 bg-orange-50 hover:bg-orange-100 border border-orange-200 px-2 py-0.5 rounded-md flex items-center gap-1 cursor-pointer whitespace-nowrap transition-colors"
+                title="Visualizar PDF / Documento"
+              >
+                <Eye className="w-3.5 h-3.5 text-orange-600" />
+                <span>Ver</span>
+              </button>
+
+              {docItem.category === 'extrato' &&
+                effectiveOfxStatus !== 'queued' &&
+                effectiveOfxStatus !== 'processing' &&
+                effectiveOfxStatus !== 'done' && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      enqueueDocumentForOfx(docItem);
+                    }}
+                    className="text-[11px] font-semibold text-teal-800 hover:text-teal-950 bg-teal-50 hover:bg-teal-100 border border-teal-200 px-2 py-0.5 rounded-md flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                    title="Gerar arquivo OFX agora"
+                  >
+                    <Play className="w-3 h-3 fill-current" />
+                    <span>Gerar OFX</span>
+                  </button>
+                )}
+
+              {docItem.category === 'extrato' && onOpenInOfxConverter && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleSendToOfx(docItem);
+                  }}
+                  className="text-[11px] font-semibold text-teal-700 hover:text-teal-900 flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                  title="Abrir no Conversor OFX"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  <span>OFX</span>
+                  <ArrowRight className="w-3 h-3" />
+                </button>
+              )}
+
+              {docItem.category !== 'extrato' && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    enqueueNonExtratoProcessing(docItem);
+                  }}
+                  disabled={
+                    docProcJob?.status === 'queued' || docProcJob?.status === 'processing'
+                  }
+                  className="text-[11px] font-semibold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200/80 px-2 py-0.5 rounded-md flex items-center gap-1 cursor-pointer whitespace-nowrap disabled:opacity-50"
+                  title="Processar documento com IA (extrair valores, CNPJ e lançamento contábil)"
+                >
+                  {docProcJob?.status === 'queued' || docProcJob?.status === 'processing' ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <Play className="w-3 h-3 fill-current" />
+                  )}
+                  <span>{isNonExtratoProcessed ? 'Reprocessar' : 'Processar'}</span>
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1 shrink-0">
+              {docItem.status !== 'concluido' && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleArchiveDocument(docItem);
+                  }}
+                  className="px-2 py-0.5 rounded bg-slate-100 hover:bg-teal-50 text-slate-700 hover:text-teal-800 text-[10px] font-semibold flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                  title="Arquivar em Concluído"
+                >
+                  <Archive className="w-3 h-3" />
+                  <span>Concluir</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleDownloadFile(docItem);
+                }}
+                className="text-[11px] text-slate-500 hover:text-slate-900 hover:bg-slate-100 p-1 rounded cursor-pointer"
+                title="Baixar arquivo original"
+              >
+                <Download className="w-3.5 h-3.5" />
+              </button>
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setConfirmDeleteId(docItem.id);
+                }}
+                className="text-[11px] text-slate-400 hover:text-rose-600 hover:bg-rose-50 p-1 rounded cursor-pointer"
+                title="Excluir arquivo"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -1027,14 +1565,14 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
   return (
     <div className="space-y-4">
-      {/* Top Toolbar: Company Selector + Upload Action + View Mode Switch */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3 min-w-0">
-          <div className="flex items-center gap-2.5 min-w-0">
+      {/* Top Toolbar: Company Selector + View Mode Switch + Upload CTA */}
+      <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 min-w-0 flex-1">
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
             <div className="w-9 h-9 rounded-lg bg-teal-50 text-teal-700 border border-teal-200 flex items-center justify-center shrink-0">
               <FolderOpen className="w-4 h-4" />
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <h2 className="text-sm font-bold text-slate-900 truncate">
                 Arquivos Contábeis da Empresa
               </h2>
@@ -1045,14 +1583,14 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           </div>
 
           {/* Company Selector */}
-          <div className="flex items-center gap-2 sm:pl-3 sm:border-l sm:border-slate-200">
+          <div className="flex items-center gap-2 sm:pl-3 sm:border-l sm:border-slate-200 shrink-0">
             <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
             {isAdmin ? (
               <select
                 value={currentCompany.id}
                 onChange={(e) => onSelectCompany(e.target.value)}
                 aria-label="Selecionar empresa"
-                className="text-xs font-semibold text-slate-800 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-600 cursor-pointer max-w-[230px]"
+                className="text-xs font-semibold text-slate-800 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-600 cursor-pointer max-w-[190px] xl:max-w-[210px]"
               >
                 {allCompanies.map((c) => (
                   <option key={c.id} value={c.id}>
@@ -1061,16 +1599,16 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 ))}
               </select>
             ) : (
-              <span className="text-xs font-semibold text-slate-800 truncate max-w-[220px]">
+              <span className="text-xs font-semibold text-slate-800 truncate max-w-[200px]">
                 {currentCompany.fantasyName || currentCompany.name}
               </span>
             )}
           </div>
         </div>
 
-        {/* Right Controls: View Switcher + Add Files CTA */}
-        <div className="flex flex-wrap items-center gap-2.5">
-          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200/70">
+        {/* Right Controls: View Switcher + Compact Folder Upload CTA on the same line */}
+        <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0">
+          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200/70 overflow-x-auto">
             <button
               type="button"
               onClick={() => setViewMode('kanban_category')}
@@ -1126,14 +1664,16 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={Boolean(uploadingQueue)}
-            className="px-4 py-2 rounded-lg bg-[#00897b] hover:bg-[#00796b] text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-60"
+            title="Enviar arquivos (Upload)"
+            aria-label="Upload de arquivos"
+            className="px-3.5 py-2 rounded-lg bg-[#00897b] hover:bg-[#00796b] text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-60"
           >
             {uploadingQueue ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
-              <Upload className="w-3.5 h-3.5" />
+              <FolderUp className="w-4 h-4" />
             )}
-            <span>Adicionar Arquivos</span>
+            <span>Upload</span>
           </button>
         </div>
       </div>
@@ -1232,6 +1772,130 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         </div>
       </div>
 
+      {/* Agente Automático OFX & Processamento Contábil Bar */}
+      <div className="bg-white border border-teal-200/80 rounded-xl p-3 flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="w-8 h-8 rounded-lg bg-teal-50 text-teal-700 border border-teal-200 flex items-center justify-center shrink-0">
+            <Bot className="w-4 h-4" />
+          </div>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-bold text-slate-900">
+                Agente Automático OFX & Processamento Contábil
+              </span>
+              {activeQueueCount + activeDocProcessCount > 0 && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-teal-100 text-teal-800 text-[10px] font-bold">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  {activeQueueCount + activeDocProcessCount} em processamento
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-slate-500 truncate">
+              Gera .OFX para extratos bancários e extrai dados contábeis de notas, guias e recibos
+              {lastSweepAt
+                ? ` · Última verificação: ${new Date(lastSweepAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
+                : ''}
+              {autoRunEnabled && nextSweepAt
+                ? ` · Próxima: ${new Date(nextSweepAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
+                : ''}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={autoRunEnabled}
+              onChange={(e) => setAutoRunEnabled(e.target.checked)}
+              className="rounded border-slate-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+            />
+            <span>Ativo</span>
+          </label>
+
+          <select
+            value={scheduleMode}
+            onChange={(e) => setScheduleMode(e.target.value as OfxAgentScheduleMode)}
+            aria-label="Frequência do agente OFX"
+            className="text-xs font-medium text-slate-800 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-teal-600 cursor-pointer"
+          >
+            <option value="on_upload">Ao Importar Arquivo</option>
+            <option value="hourly">Verificação a Cada Hora</option>
+            <option value="daily">Verificação Diária</option>
+          </select>
+
+          <button
+            type="button"
+            onClick={() =>
+              void runPendingSweep(documents).then((count) => {
+                showToast(
+                  count > 0
+                    ? `Agente OFX disparado para ${count} extrato(s) pendente(s).`
+                    : 'Nenhum extrato pendente para conversão no momento.'
+                );
+              })
+            }
+            disabled={isSweeping}
+            className="px-3 py-1.5 rounded-lg bg-[#004d40] hover:bg-[#00695c] text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-60 whitespace-nowrap"
+          >
+            {isSweeping ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Play className="w-3.5 h-3.5 fill-current" />
+            )}
+            <span>Analisar Extratos (OFX)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() =>
+              void runPendingNonExtratoSweep(documents).then((count) => {
+                showToast(
+                  count > 0
+                    ? `Processamento iniciado para ${count} documento(s) (notas, guias, recibos).`
+                    : 'Todos os outros documentos pendentes já foram processados.'
+                );
+              })
+            }
+            disabled={isProcessingOtherDocs}
+            className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-60 whitespace-nowrap"
+            title="Extrair dados contábeis e sugestão de lançamento de Notas Fiscais, Guias, Recibos e Outros"
+          >
+            {isProcessingOtherDocs || activeDocProcessCount > 0 ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Play className="w-3.5 h-3.5 fill-current" />
+            )}
+            <span>Processar Outros Docs</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() =>
+              void syncEmailInboxNow({ silent: false }).then((count) => {
+                if (count > 0) {
+                  void loadDocuments();
+                }
+              })
+            }
+            disabled={isSyncingInbox}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-60 whitespace-nowrap border ${
+              inboxConfigured
+                ? 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-200'
+                : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+            }`}
+            title={`Verificar anexos enviados para ${inboxEmailAddress || 'contsuitesistemas@gmail.com'}`}
+          >
+            {isSyncingInbox ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Mail className="w-3.5 h-3.5" />
+            )}
+            <span>{isSyncingInbox ? 'Verificando E-mail...' : 'Receber E-mails'}</span>
+          </button>
+        </div>
+      </div>
+
       {/* Filter Bar */}
       <div className="bg-white border border-slate-200 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
         <div className="relative flex-1 min-w-0">
@@ -1273,6 +1937,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             <option value="pendente">Recebido / Pendente</option>
             <option value="em_analise">Em Análise</option>
             <option value="contabilizado">Contabilizado</option>
+            <option value="concluido">Concluído / Arquivado</option>
           </select>
 
           <button
@@ -1344,8 +2009,8 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           })}
         </div>
       ) : viewMode === 'kanban_status' ? (
-        /* KANBAN BY ACCOUNTING STATUS */
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        /* KANBAN BY ACCOUNTING STATUS (INCLUDING LAST COLUMN CONCLUÍDO / ARQUIVADO) */
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3.5">
           {STATUS_COLUMNS.map((col) => {
             const colDocs = filteredDocs.filter((d) => d.status === col.id);
             const isOver = dragTargetCol === `st-${col.id}`;
@@ -1503,6 +2168,67 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                           onClick={(e) => e.stopPropagation()}
                         >
                           <div className="inline-flex items-center gap-1">
+                            {docItem.status !== 'concluido' && (
+                              <button
+                                type="button"
+                                onClick={() => void handleArchiveDocument(docItem)}
+                                className="px-2 py-1 text-[11px] font-semibold text-slate-700 hover:text-teal-800 hover:bg-teal-50 rounded cursor-pointer whitespace-nowrap"
+                                title="Arquivar em Concluído"
+                              >
+                                Concluir
+                              </button>
+                            )}
+                            {docItem.category === 'extrato' && (
+                              <>
+                                {(docJobs[docItem.id]?.status === 'done' ||
+                                  docItem.ofxStatus === 'done' ||
+                                  docJobs[docItem.id]?.statementId ||
+                                  docItem.ofxStatementId ||
+                                  recentStatements.some((s) => s.sourceDocId === docItem.id)) && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void handleDownloadGeneratedOfx(
+                                        docJobs[docItem.id]?.statementId ||
+                                          docItem.ofxStatementId ||
+                                          recentStatements.find((s) => s.sourceDocId === docItem.id)?.id,
+                                        docItem.fileName,
+                                        docItem
+                                      )
+                                    }
+                                    className="px-2 py-1 text-[11px] font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded cursor-pointer whitespace-nowrap inline-flex items-center gap-1"
+                                    title="Baixar OFX gerado"
+                                  >
+                                    <Download className="w-3 h-3" />
+                                    <span>Baixar OFX</span>
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => enqueueDocumentForOfx(docItem)}
+                                  disabled={
+                                    docJobs[docItem.id]?.status === 'queued' ||
+                                    docJobs[docItem.id]?.status === 'processing'
+                                  }
+                                  className="px-2 py-1 text-[11px] font-semibold text-teal-800 hover:bg-teal-50 rounded cursor-pointer whitespace-nowrap inline-flex items-center gap-1 disabled:opacity-50"
+                                  title="Processar / refazer OFX"
+                                >
+                                  {docJobs[docItem.id]?.status === 'queued' ||
+                                  docJobs[docItem.id]?.status === 'processing' ? (
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                  ) : docItem.ofxStatus === 'done' || docItem.ofxStatementId ? (
+                                    <RefreshCw className="w-3 h-3" />
+                                  ) : (
+                                    <Play className="w-3 h-3 fill-current" />
+                                  )}
+                                  <span>
+                                    {docItem.ofxStatus === 'done' || docItem.ofxStatementId
+                                      ? 'Refazer OFX'
+                                      : 'Gerar OFX'}
+                                  </span>
+                                </button>
+                              </>
+                            )}
                             {docItem.category === 'extrato' && onOpenInOfxConverter && (
                               <button
                                 type="button"
@@ -1510,13 +2236,33 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                 className="px-2 py-1 text-[11px] font-semibold text-teal-700 hover:bg-teal-50 rounded cursor-pointer whitespace-nowrap"
                                 title="Abrir no Conversor OFX"
                               >
-                                OFX
+                                Conversor
+                              </button>
+                            )}
+                            {docItem.category !== 'extrato' && (
+                              <button
+                                type="button"
+                                onClick={() => enqueueNonExtratoProcessing(docItem)}
+                                disabled={
+                                  docProcessJobs[docItem.id]?.status === 'queued' ||
+                                  docProcessJobs[docItem.id]?.status === 'processing'
+                                }
+                                className="px-2 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-50 rounded cursor-pointer whitespace-nowrap inline-flex items-center gap-1 disabled:opacity-50"
+                                title="Processar documento com IA (Play)"
+                              >
+                                {docProcessJobs[docItem.id]?.status === 'queued' ||
+                                docProcessJobs[docItem.id]?.status === 'processing' ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <Play className="w-3 h-3 fill-current" />
+                                )}
+                                <span>Processar</span>
                               </button>
                             )}
                             <button
                               type="button"
                               onClick={() => void openDetailModal(docItem)}
-                              className="p-1.5 text-slate-500 hover:text-slate-900 rounded cursor-pointer"
+                              className="p-1.5 text-orange-600 hover:text-orange-800 hover:bg-orange-50 border border-orange-200/80 rounded-md cursor-pointer transition-colors"
                               title="Visualizar e editar"
                             >
                               <Eye className="w-3.5 h-3.5" />
@@ -1529,14 +2275,33 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                             >
                               <Download className="w-3.5 h-3.5" />
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => void handleDeleteDocument(docItem.id)}
-                              className="p-1.5 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
-                              title="Excluir arquivo"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            {confirmDeleteId === docItem.id ? (
+                              <span className="inline-flex items-center gap-1 ml-1">
+                                <button
+                                  type="button"
+                                  onClick={() => void handleDeleteDocument(docItem.id)}
+                                  className="px-2 py-0.5 rounded bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold cursor-pointer"
+                                >
+                                  Confirmar
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteId(null)}
+                                  className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px] font-medium cursor-pointer"
+                                >
+                                  Cancelar
+                                </button>
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteId(docItem.id)}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
+                                title="Excluir arquivo"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1557,10 +2322,10 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="bg-white border border-slate-200 rounded-xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden"
+            className="bg-white border border-slate-200 rounded-xl shadow-2xl w-full max-w-6xl h-[92vh] max-h-[92vh] flex flex-col overflow-hidden"
           >
             {/* Modal Header */}
-            <div className="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between gap-4">
+            <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between gap-4 shrink-0">
               <div className="min-w-0">
                 <h3 className="text-sm font-bold text-slate-900 truncate">
                   {selectedDoc.fileName}
@@ -1573,19 +2338,122 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                     : ''}
                 </p>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
-                {editDraft.category === 'extrato' && onOpenInOfxConverter && (
+              <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setIsPreviewExpanded((v) => !v)}
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                  title={isPreviewExpanded ? 'Restaurar visualização dividida' : 'Expandir pré-visualização'}
+                >
+                  {isPreviewExpanded ? (
+                    <>
+                      <Minimize2 className="w-3.5 h-3.5" />
+                      <span>Dividir Tela</span>
+                    </>
+                  ) : (
+                    <>
+                      <Maximize2 className="w-3.5 h-3.5" />
+                      <span>Expandir Preview</span>
+                    </>
+                  )}
+                </button>
+                {selectedDoc.status !== 'concluido' && (
                   <button
                     type="button"
                     onClick={() => {
-                      const target = selectedDoc;
-                      closeDetailModal();
-                      void handleSendToOfx(target);
+                      setEditDraft((prev) => (prev ? { ...prev, status: 'concluido' } : prev));
+                      void handleArchiveDocument(selectedDoc);
                     }}
-                    className="px-3 py-1.5 rounded-lg bg-teal-50 text-teal-800 hover:bg-teal-100 border border-teal-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                    className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
                   >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>Abrir no Conversor OFX</span>
+                    <Archive className="w-3.5 h-3.5" />
+                    <span>Arquivar (Concluído)</span>
+                  </button>
+                )}
+                {editDraft.category === 'extrato' && (
+                  <>
+                    {(docJobs[selectedDoc.id]?.status === 'done' ||
+                      selectedDoc.ofxStatus === 'done' ||
+                      docJobs[selectedDoc.id]?.statementId ||
+                      selectedDoc.ofxStatementId ||
+                      recentStatements.some((s) => s.sourceDocId === selectedDoc.id)) && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void handleDownloadGeneratedOfx(
+                            docJobs[selectedDoc.id]?.statementId ||
+                              selectedDoc.ofxStatementId ||
+                              recentStatements.find((s) => s.sourceDocId === selectedDoc.id)?.id,
+                            selectedDoc.fileName,
+                            selectedDoc
+                          )
+                        }
+                        className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Baixar OFX</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        enqueueDocumentForOfx(selectedDoc, previewBase64 || undefined)
+                      }
+                      disabled={
+                        docJobs[selectedDoc.id]?.status === 'queued' ||
+                        docJobs[selectedDoc.id]?.status === 'processing'
+                      }
+                      className="px-3 py-1.5 rounded-lg bg-[#004d40] hover:bg-[#00695c] text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-60"
+                    >
+                      {docJobs[selectedDoc.id]?.status === 'queued' ||
+                      docJobs[selectedDoc.id]?.status === 'processing' ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : selectedDoc.ofxStatus === 'done' || selectedDoc.ofxStatementId ? (
+                        <RefreshCw className="w-3.5 h-3.5" />
+                      ) : (
+                        <Play className="w-3.5 h-3.5 fill-current" />
+                      )}
+                      <span>
+                        {selectedDoc.ofxStatus === 'done' || selectedDoc.ofxStatementId
+                          ? 'Refazer OFX'
+                          : 'Gerar OFX'}
+                      </span>
+                    </button>
+                    {onOpenInOfxConverter && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const target = selectedDoc;
+                          closeDetailModal();
+                          void handleSendToOfx(target);
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-teal-50 text-teal-800 hover:bg-teal-100 border border-teal-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Abrir no Conversor OFX</span>
+                      </button>
+                    )}
+                  </>
+                )}
+                {editDraft.category !== 'extrato' && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      enqueueNonExtratoProcessing(selectedDoc, previewBase64 || undefined)
+                    }
+                    disabled={
+                      docProcessJobs[selectedDoc.id]?.status === 'queued' ||
+                      docProcessJobs[selectedDoc.id]?.status === 'processing'
+                    }
+                    className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-60"
+                  >
+                    {docProcessJobs[selectedDoc.id]?.status === 'queued' ||
+                    docProcessJobs[selectedDoc.id]?.status === 'processing' ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                    )}
+                    <span>Processar Documento</span>
                   </button>
                 )}
                 <button
@@ -1607,59 +2475,97 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             </div>
 
             {/* Modal Body: Preview Left + Metadata Form Right */}
-            <div className="flex-1 overflow-y-auto grid grid-cols-1 lg:grid-cols-12">
+            <div className="flex-1 min-h-0 overflow-y-auto lg:overflow-hidden grid grid-cols-1 lg:grid-cols-12">
               {/* Preview Area */}
-              <div className="lg:col-span-7 bg-slate-100 border-b lg:border-b-0 lg:border-r border-slate-200 p-4 flex flex-col min-h-[320px]">
+              <div
+                className={`${
+                  isPreviewExpanded ? 'lg:col-span-12' : 'lg:col-span-7 border-b lg:border-b-0 lg:border-r border-slate-200'
+                } bg-slate-100 p-3 sm:p-4 flex flex-col min-h-[380px] lg:min-h-0 lg:h-full`}
+              >
+                <input
+                  ref={reattachInputRef}
+                  type="file"
+                  accept=".pdf,.png,.jpg,.jpeg,.webp,.xml,.ofx,.csv,.txt"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f && selectedDoc) {
+                      void handleReattachFile(selectedDoc, f);
+                    }
+                    e.target.value = '';
+                  }}
+                />
                 {loadingPreview ? (
                   <div className="flex-1 flex flex-col items-center justify-center text-slate-500 gap-2">
                     <Loader2 className="w-6 h-6 animate-spin text-[#00897b]" />
                     <p className="text-xs">Carregando pré-visualização...</p>
                   </div>
                 ) : previewTextContent ? (
-                  <pre className="flex-1 bg-white border border-slate-200 rounded-lg p-3 text-[11px] font-mono text-slate-800 overflow-auto max-h-[520px] whitespace-pre-wrap break-all">
+                  <pre className="flex-1 min-h-0 bg-white border border-slate-200 rounded-xl p-3.5 text-[11px] font-mono text-slate-800 overflow-auto whitespace-pre-wrap break-all">
                     {previewTextContent}
                   </pre>
-                ) : previewBlobUrl &&
-                  (selectedDoc.mimeType === 'application/pdf' ||
-                    selectedDoc.fileName.toLowerCase().endsWith('.pdf')) ? (
-                  <iframe
-                    src={previewBlobUrl}
-                    title={selectedDoc.fileName}
-                    className="w-full flex-1 min-h-[460px] rounded-lg border border-slate-200 bg-white"
+                ) : previewBase64 && isPdfDoc(selectedDoc) ? (
+                  <PdfCanvasViewer
+                    base64={previewBase64}
+                    fileName={selectedDoc.fileName}
+                    mimeType="application/pdf"
+                    className="flex-1 min-h-0"
+                    maxHeightClass="flex-1 min-h-[340px]"
                   />
-                ) : previewBlobUrl && selectedDoc.mimeType.startsWith('image/') ? (
-                  <div className="flex-1 flex items-center justify-center bg-white rounded-lg border border-slate-200 p-2">
+                ) : previewBlobUrl && isImageDoc(selectedDoc) ? (
+                  <div className="flex-1 min-h-0 overflow-auto flex items-center justify-center bg-white rounded-xl border border-slate-200 p-3">
                     <img
                       src={previewBlobUrl}
                       alt={selectedDoc.fileName}
-                      className="max-h-[480px] w-auto object-contain rounded"
+                      className="max-h-full max-w-full w-auto object-contain rounded"
                     />
                   </div>
                 ) : (
-                  <div className="flex-1 flex flex-col items-center justify-center text-center p-6 bg-white rounded-lg border border-slate-200 gap-3">
+                  <div className="flex-1 flex flex-col items-center justify-center text-center p-6 bg-white rounded-xl border border-slate-200 gap-3">
                     <FileIcon className="w-10 h-10 text-slate-400" />
-                    <div>
+                    <div className="max-w-sm">
                       <p className="text-xs font-semibold text-slate-800">
-                        Pré-visualização direta não disponível para este formato
+                        {!previewBase64
+                          ? 'Arquivo original não está armazenado localmente neste navegador'
+                          : 'Pré-visualização direta não disponível para este formato'}
                       </p>
                       <p className="text-[11px] text-slate-500 mt-1">
-                        {selectedDoc.summary || 'Use o botão Baixar para abrir o documento original.'}
+                        {!previewBase64
+                          ? 'Se o documento foi importado em outro navegador/sessão, você pode reanexá-lo para visualizar o PDF aqui.'
+                          : selectedDoc.summary || 'Use o botão Baixar para abrir o documento original.'}
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => void handleDownloadFile(selectedDoc)}
-                      className="px-3.5 py-2 rounded-lg bg-[#00897b] text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>Baixar Arquivo</span>
-                    </button>
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      {!previewBase64 ? (
+                        <button
+                          type="button"
+                          onClick={() => reattachInputRef.current?.click()}
+                          className="px-3.5 py-2 rounded-lg bg-[#00897b] hover:bg-[#00796b] text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>Reanexar Arquivo para Visualizar</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void handleDownloadFile(selectedDoc)}
+                          className="px-3.5 py-2 rounded-lg bg-[#00897b] text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Baixar Arquivo</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
 
               {/* Classification & Metadata Form */}
-              <div className="lg:col-span-5 p-5 space-y-3.5">
+              <div
+                className={`${
+                  isPreviewExpanded ? 'hidden' : 'lg:col-span-5 lg:h-full lg:overflow-y-auto'
+                } p-5 space-y-3.5`}
+              >
                 <div className="flex items-center justify-between gap-2">
                   <h4 className="text-xs font-bold text-slate-900">
                     Classificação e Dados Contábeis

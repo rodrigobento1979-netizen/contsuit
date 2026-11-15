@@ -15,6 +15,8 @@ import { DatabaseView } from './components/DatabaseView';
 import { CompaniesView } from './components/CompaniesView';
 import { DocumentsView } from './components/DocumentsView';
 import { Sidebar, AppNavTab } from './components/Sidebar';
+import { HelpCenterModal } from './components/HelpCenterModal';
+import { OfxAgentProvider } from './context/OfxAgentContext';
 import { User, Company, Asset, DepreciationSummary, ConvertedStatement } from './types';
 import { Loader2, AlertCircle, CheckCircle } from 'lucide-react';
 import { 
@@ -26,6 +28,8 @@ import {
   saveAssetToFirestore,
   deleteAssetFromFirestore,
   saveStatementToFirestore,
+  fetchStatementsFromFirestore,
+  deleteStatementFromFirestore,
   syncUserToFirestore,
   fetchUsersFromFirestore,
   deleteUserFromFirestore
@@ -86,10 +90,18 @@ export default function App() {
   const [companyToEdit, setCompanyToEdit] = useState<Company | null>(null);
   const [companyPrefill, setCompanyPrefill] = useState<{ name?: string; cnpj?: string; fantasyName?: string } | null>(null);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
   const [pendingOfxFile, setPendingOfxFile] = useState<File | null>(null);
 
   const handleOpenCompanyModalWithPrefill = (prefill: { name?: string; cnpj?: string; fantasyName?: string }) => {
+    setCompanyToEdit(null);
     setCompanyPrefill(prefill);
+    setIsCompanyModalOpen(true);
+  };
+
+  const handleOpenNewCompanyModal = () => {
+    setCompanyToEdit(null);
+    setCompanyPrefill(null);
     setIsCompanyModalOpen(true);
   };
 
@@ -99,7 +111,7 @@ export default function App() {
 
   // Synchronize document title and icon in browser tab
   useEffect(() => {
-    document.title = 'ContSuite - Sistema Contábil';
+    document.title = 'ContSuite v1.0 - Sistema Contábil';
   }, []);
 
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
@@ -155,14 +167,21 @@ export default function App() {
     }
   };
 
-  // 1. Fetch Companies and Users (Scoped to user role and tenant, resilient across Vercel & Firestore)
+  // 1. Fetch Companies and Users (Admin/Accountant vê TODAS as empresas; Cliente vê apenas as suas)
   const fetchCompaniesAndUsers = useCallback(async () => {
+    const normCurrentEmail = (currentUser.email || '').toLowerCase().trim();
+    const isMasterEmail =
+      normCurrentEmail === 'rodrigobento1979@gmail.com' ||
+      normCurrentEmail === 'contsuitesistemas@gmail.com';
+    const canViewAllCompanies =
+      isMasterEmail || currentUser.role === 'admin' || currentUser.role === 'accountant';
+
     let apiComps: Company[] = [];
     let apiUsers: User[] = [];
     try {
-      const companyUrl = currentUser.role === 'client' && currentUser.companyId
-        ? `/api/companies?role=client&companyId=${currentUser.companyId}`
-        : '/api/companies';
+      const companyUrl = !canViewAllCompanies && currentUser.companyId
+        ? `/api/companies?role=client&companyId=${encodeURIComponent(currentUser.companyId)}&userId=${encodeURIComponent(currentUser.id || '')}&email=${encodeURIComponent(normCurrentEmail)}`
+        : `/api/companies?role=admin&email=${encodeURIComponent(normCurrentEmail)}`;
 
       const [compRes, usersRes] = await Promise.all([
         fetchWithRetry(companyUrl),
@@ -197,17 +216,51 @@ export default function App() {
     } catch {}
 
     const compMap = new Map<string, Company>();
-    [...apiComps, ...firestoreCompanies, ...localComps].forEach(c => {
+    const rawCompanySources = canViewAllCompanies
+      ? [...localComps, ...firestoreCompanies, ...apiComps]
+      : [...firestoreCompanies, ...apiComps].filter(
+          (c) =>
+            c &&
+            (c.id === currentUser.companyId ||
+              (currentUser.id && c.createdByUserId === currentUser.id) ||
+              (normCurrentEmail && c.createdByEmail?.toLowerCase().trim() === normCurrentEmail))
+        );
+
+    rawCompanySources.forEach(c => {
       if (c && c.id) {
         compMap.set(c.id, { ...compMap.get(c.id), ...c });
       }
     });
     const mergedComps = Array.from(compMap.values());
+
+    // 2-way sync for Master Admin so companies created by users via either API or Firestore appear everywhere
+    if (canViewAllCompanies && mergedComps.length > 0) {
+      const apiIds = new Set(apiComps.map(c => c.id));
+      const missingInApi = mergedComps.filter(c => !apiIds.has(c.id));
+      if (missingInApi.length > 0) {
+        fetch('/api/companies/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ companies: missingInApi }),
+        }).catch(() => {});
+      }
+
+      const firestoreIds = new Set(firestoreCompanies.map(c => c.id));
+      const missingInFirestore = mergedComps.filter(c => !firestoreIds.has(c.id));
+      if (missingInFirestore.length > 0) {
+        missingInFirestore.forEach(c => {
+          saveCompanyToFirestore(c).catch(() => {});
+        });
+      }
+    }
+
     if (mergedComps.length > 0) {
       setAllCompanies(mergedComps);
-      try {
-        localStorage.setItem('contsuite_cached_companies', JSON.stringify(mergedComps));
-      } catch {}
+      if (canViewAllCompanies) {
+        try {
+          localStorage.setItem('contsuite_cached_companies', JSON.stringify(mergedComps));
+        } catch {}
+      }
 
       const found = mergedComps.find(c => c.id === currentCompanyIdRef.current);
       if (found) {
@@ -244,7 +297,7 @@ export default function App() {
         localStorage.setItem('contsuite_cached_users', JSON.stringify(mergedUsers));
       } catch {}
     }
-  }, [currentUser.role, currentUser.companyId, fetchWithRetry]);
+  }, [currentUser.role, currentUser.companyId, currentUser.id, currentUser.email, fetchWithRetry]);
 
   // 2. Fetch Assets for current company (Data Isolation)
   const fetchAssets = useCallback(async () => {
@@ -274,19 +327,117 @@ export default function App() {
     }
   }, [currentCompany.id, selectedMonth, fetchWithRetry]);
 
-  // 4. Fetch Converted Statements
+  // 4. Fetch Converted Statements (Merges API + Firestore + LocalStorage for instant reliability)
   const fetchStatements = useCallback(async () => {
-    if (!currentCompany.id) return;
+    const companyId = currentCompany.id;
+    if (!companyId) return;
+
+    let apiStmts: ConvertedStatement[] = [];
     try {
-      const res = await fetchWithRetry(`/api/ofx/history?companyId=${currentCompany.id}`);
+      const res = await fetchWithRetry(`/api/ofx/history?companyId=${companyId}`);
       const data = await safeJson<ConvertedStatement[]>(res);
       if (data && Array.isArray(data)) {
-        setStatements(data);
+        apiStmts = data;
       }
     } catch (err) {
-      console.warn('Could not fetch statements right now:', err);
+      console.warn('Could not fetch statements from API right now:', err);
     }
+
+    let firestoreStmts: ConvertedStatement[] = [];
+    try {
+      firestoreStmts = await fetchStatementsFromFirestore(companyId);
+    } catch (err) {
+      console.warn('Could not fetch statements from Firestore:', err);
+    }
+
+    let localStmts: ConvertedStatement[] = [];
+    try {
+      const raw = localStorage.getItem(`contsuite_cached_statements_${companyId}`);
+      if (raw) localStmts = JSON.parse(raw);
+    } catch {}
+
+    let deletedIds = new Set<string>();
+    try {
+      const rawDel = localStorage.getItem(`contsuite_deleted_statements_${companyId}`);
+      if (rawDel) deletedIds = new Set<string>(JSON.parse(rawDel));
+    } catch {}
+
+    const map = new Map<string, ConvertedStatement>();
+    [...localStmts, ...firestoreStmts, ...apiStmts].forEach((s) => {
+      if (!s || !s.id) return;
+      if (deletedIds.has(s.id)) return;
+      if (s.companyId && s.companyId !== companyId) return;
+      const existing = map.get(s.id);
+      map.set(s.id, {
+        ...existing,
+        ...s,
+        companyId: s.companyId || companyId,
+        hasOriginalFile: Boolean(s.hasOriginalFile || existing?.hasOriginalFile || s.sourceDocId || existing?.sourceDocId),
+      });
+    });
+
+    const merged = Array.from(map.values()).sort((a, b) => {
+      const ta = a.uploadedAt ? new Date(a.uploadedAt).getTime() : 0;
+      const tb = b.uploadedAt ? new Date(b.uploadedAt).getTime() : 0;
+      return tb - ta;
+    });
+
+    setStatements(merged);
+    try {
+      localStorage.setItem(
+        `contsuite_cached_statements_${companyId}`,
+        JSON.stringify(merged.map(({ fileBase64, ...rest }) => rest))
+      );
+    } catch {}
   }, [currentCompany.id, fetchWithRetry]);
+
+  const handleStatementCreated = useCallback((stmt: ConvertedStatement) => {
+    if (!stmt || !stmt.id) return;
+    const targetCompanyId = stmt.companyId || currentCompanyIdRef.current;
+    const { fileBase64, ...compact } = stmt;
+    const normalized: ConvertedStatement = {
+      ...compact,
+      companyId: targetCompanyId,
+      hasOriginalFile: Boolean(fileBase64 || compact.hasOriginalFile || compact.sourceDocId),
+    };
+
+    try {
+      const delRaw = localStorage.getItem(`contsuite_deleted_statements_${targetCompanyId}`);
+      if (delRaw) {
+        const nextDel = (JSON.parse(delRaw) as string[]).filter((id) => id !== normalized.id);
+        localStorage.setItem(`contsuite_deleted_statements_${targetCompanyId}`, JSON.stringify(nextDel));
+      }
+    } catch {}
+
+    if (targetCompanyId === currentCompanyIdRef.current) {
+      setStatements((prev) => [normalized, ...prev.filter((s) => s.id !== normalized.id)]);
+    }
+  }, []);
+
+  const handleStatementDeleted = useCallback(async (statementId: string) => {
+    const companyId = currentCompanyIdRef.current;
+    if (!companyId || !statementId) return;
+
+    setStatements((prev) => prev.filter((s) => s.id !== statementId));
+    try {
+      const cacheKey = `contsuite_cached_statements_${companyId}`;
+      const raw = localStorage.getItem(cacheKey);
+      if (raw) {
+        const next = (JSON.parse(raw) as ConvertedStatement[]).filter((s) => s.id !== statementId);
+        localStorage.setItem(cacheKey, JSON.stringify(next));
+      }
+      const delKey = `contsuite_deleted_statements_${companyId}`;
+      const rawDel = localStorage.getItem(delKey);
+      const delArr: string[] = rawDel ? JSON.parse(rawDel) : [];
+      if (!delArr.includes(statementId)) {
+        localStorage.setItem(delKey, JSON.stringify([statementId, ...delArr].slice(0, 200)));
+      }
+    } catch {}
+
+    try {
+      await deleteStatementFromFirestore(companyId, statementId);
+    } catch {}
+  }, []);
 
   // Initial load
   useEffect(() => {
@@ -303,15 +454,35 @@ export default function App() {
     const unsubscribe = subscribeToAuth(async (user) => {
       setFirebaseUser(user);
       if (user && user.email) {
-        const isAdminEmail = user.email.toLowerCase() === 'rodrigobento1979@gmail.com';
-        const role = isAdminEmail ? 'admin' : 'client';
+        const normEmail = user.email.toLowerCase().trim();
+        const isMasterEmail =
+          normEmail === 'rodrigobento1979@gmail.com' ||
+          normEmail === 'contsuitesistemas@gmail.com';
+
+        let resolvedRole: User['role'] = isMasterEmail ? 'admin' : 'client';
+        let resolvedCompanyId = currentCompanyIdRef.current || 'comp-master';
+
+        if (!isMasterEmail) {
+          try {
+            const loginRes = await fetch('/api/auth/login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email: normEmail }),
+            });
+            if (loginRes.ok) {
+              const loginData = await loginRes.json();
+              if (loginData?.user?.role) resolvedRole = loginData.user.role;
+              if (loginData?.user?.companyId) resolvedCompanyId = loginData.user.companyId;
+            }
+          } catch {}
+        }
 
         const syncedUser: User = {
           id: user.uid,
           name: user.displayName || user.email.split('@')[0],
           email: user.email,
-          role: role as any,
-          companyId: currentCompanyIdRef.current || 'comp-master',
+          role: resolvedRole,
+          companyId: resolvedCompanyId,
           createdAt: new Date().toISOString(),
           status: 'active',
         };
@@ -700,7 +871,7 @@ export default function App() {
     }
   };
 
-  // Save or update company
+  // Save or update company (always anchored to Master Admin Rodrigo Bento and tracking creator user)
   const handleSaveCompany = async (companyData: Partial<Company>) => {
     if (companyToEdit) {
       const res = await fetch(`/api/companies/${companyToEdit.id}`, {
@@ -708,8 +879,8 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...companyData,
-          adminEmail: currentUser.email || 'rodrigobento1979@gmail.com',
-          adminName: currentUser.name || 'Rodrigo Bento',
+          adminEmail: companyToEdit.adminEmail || 'rodrigobento1979@gmail.com',
+          adminName: companyToEdit.adminName || 'Rodrigo Bento',
         }),
       });
       if (!res.ok) throw new Error('Falha ao atualizar empresa');
@@ -730,8 +901,11 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...companyData,
-          adminEmail: currentUser.email || 'rodrigobento1979@gmail.com',
-          adminName: currentUser.name || 'Rodrigo Bento',
+          adminEmail: 'rodrigobento1979@gmail.com',
+          adminName: 'Rodrigo Bento',
+          createdByUserId: currentUser.id,
+          createdByEmail: currentUser.email,
+          createdByName: currentUser.name,
         }),
       });
       if (!res.ok) throw new Error('Falha ao cadastrar empresa');
@@ -760,34 +934,43 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100/70 text-slate-900 flex font-sans antialiased w-full">
-      {/* Toast notification */}
-      {toastMessage && (
-        <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2 px-4 py-3 rounded-xl bg-slate-900 text-white text-xs font-semibold shadow-2xl border border-slate-700 animate-in fade-in slide-in-from-bottom-5">
-          {toastMessage.type === 'success' ? (
-            <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
-          ) : (
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-          )}
-          <span>{toastMessage.text}</span>
-        </div>
-      )}
+    <OfxAgentProvider
+      currentUser={currentUser}
+      currentCompany={currentCompany}
+      allCompanies={allCompanies}
+      onStatementsChanged={fetchStatements}
+      onStatementCreated={handleStatementCreated}
+      showToast={showToast}
+    >
+      <div className="min-h-screen bg-slate-100/70 text-slate-900 flex font-sans antialiased w-full">
+        {/* Toast notification */}
+        {toastMessage && (
+          <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2 px-4 py-3 rounded-xl bg-slate-900 text-white text-xs font-semibold shadow-2xl border border-slate-700 animate-in fade-in slide-in-from-bottom-5">
+            {toastMessage.type === 'success' ? (
+              <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+            )}
+            <span>{toastMessage.text}</span>
+          </div>
+        )}
 
-      {/* Desktop Left Sidebar: Sticky to viewport while main content scrolls with browser */}
-      <div className="hidden md:flex shrink-0 sticky top-0 h-screen z-30">
-        <Sidebar
-          currentUser={currentUser}
-          currentCompany={currentCompany}
-          activeTab={activeTab}
-          setActiveTab={(tab) => {
-            setActiveTab(tab);
-            setIsMobileSidebarOpen(false);
-          }}
-          onOpenCompanyModal={() => setIsCompanyModalOpen(true)}
-          onOpenUserModal={() => setIsUserModalOpen(true)}
-          onLogout={handleLogout}
-        />
-      </div>
+        {/* Desktop Left Sidebar: Sticky to viewport while main content scrolls with browser */}
+        <div className="hidden md:flex shrink-0 sticky top-0 h-screen z-30">
+          <Sidebar
+            currentUser={currentUser}
+            currentCompany={currentCompany}
+            activeTab={activeTab}
+            setActiveTab={(tab) => {
+              setActiveTab(tab);
+              setIsMobileSidebarOpen(false);
+            }}
+            onOpenCompanyModal={handleOpenNewCompanyModal}
+            onOpenUserModal={() => setIsUserModalOpen(true)}
+            onOpenHelpModal={() => setIsHelpModalOpen(true)}
+            onLogout={handleLogout}
+          />
+        </div>
 
       {/* Mobile Sidebar Overlay Drawer */}
       {isMobileSidebarOpen && (
@@ -806,11 +989,15 @@ export default function App() {
                 setIsMobileSidebarOpen(false);
               }}
               onOpenCompanyModal={() => {
-                setIsCompanyModalOpen(true);
+                handleOpenNewCompanyModal();
                 setIsMobileSidebarOpen(false);
               }}
               onOpenUserModal={() => {
                 setIsUserModalOpen(true);
+                setIsMobileSidebarOpen(false);
+              }}
+              onOpenHelpModal={() => {
+                setIsHelpModalOpen(true);
                 setIsMobileSidebarOpen(false);
               }}
               onLogout={handleLogout}
@@ -849,7 +1036,7 @@ export default function App() {
                   currentUser={currentUser}
                   currentCompany={currentCompany}
                   onNavigate={(tab) => setActiveTab(tab)}
-                  onOpenCompanyModal={() => setIsCompanyModalOpen(true)}
+                  onOpenCompanyModal={handleOpenNewCompanyModal}
                 />
               )}
 
@@ -858,8 +1045,14 @@ export default function App() {
                 <CompaniesView
                   currentCompany={currentCompany}
                   allCompanies={allCompanies}
+                  allUsers={allUsers}
                   currentUser={currentUser}
                   onSelectCompany={(comp) => handleSwitchCompany(comp.id)}
+                  onQuickNavigate={(comp, tab) => {
+                    handleSwitchCompany(comp.id);
+                    setActiveTab(tab);
+                  }}
+                  onRefreshCompanies={fetchCompaniesAndUsers}
                   onOpenNewCompanyModal={() => {
                     setCompanyToEdit(null);
                     setCompanyPrefill(null);
@@ -902,6 +1095,7 @@ export default function App() {
                   onSelectCompany={handleSwitchCompany}
                   historyStatements={statements}
                   onRefreshHistory={fetchStatements}
+                  onStatementDeleted={handleStatementDeleted}
                   initialFile={pendingOfxFile}
                   onConsumeInitialFile={() => setPendingOfxFile(null)}
                 />
@@ -1015,6 +1209,15 @@ export default function App() {
         prefillData={companyPrefill}
         companyToEdit={companyToEdit}
       />
-    </div>
+
+      {/* Help Center & Changelog Modal (v1.0) */}
+      <HelpCenterModal
+        isOpen={isHelpModalOpen}
+        onClose={() => setIsHelpModalOpen(false)}
+        onNavigate={(tab) => setActiveTab(tab)}
+        isAdmin={currentUser.role === 'admin'}
+      />
+      </div>
+    </OfxAgentProvider>
   );
 }

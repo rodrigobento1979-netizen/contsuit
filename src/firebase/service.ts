@@ -149,13 +149,32 @@ export async function saveStatementToFirestore(companyId: string, statement: Con
   if (!auth.currentUser || !companyId) return;
   const statementId = statement.id || 'stmt-' + Date.now().toString(36);
   const path = `companies/${companyId}/statements/${statementId}`;
+  const { fileBase64, ...rest } = statement;
+  const cleanPayload: Record<string, any> = {};
+  Object.entries({
+    ...rest,
+    id: statementId,
+    companyId,
+    hasOriginalFile: Boolean(fileBase64 || rest.hasOriginalFile || rest.sourceDocId),
+  }).forEach(([key, val]) => {
+    if (val !== undefined) {
+      cleanPayload[key] = val;
+    }
+  });
   try {
-    await setDoc(doc(db, 'companies', companyId, 'statements', statementId), {
-      ...statement,
-      id: statementId,
-    }, { merge: true });
+    await setDoc(doc(db, 'companies', companyId, 'statements', statementId), cleanPayload, { merge: true });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteStatementFromFirestore(companyId: string, statementId: string): Promise<void> {
+  if (!auth.currentUser || !companyId || !statementId) return;
+  const path = `companies/${companyId}/statements/${statementId}`;
+  try {
+    await deleteDoc(doc(db, 'companies', companyId, 'statements', statementId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
 

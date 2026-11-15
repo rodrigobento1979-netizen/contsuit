@@ -3,22 +3,29 @@ import {
   Building2, 
   Search, 
   Plus, 
-  Check, 
   ArrowRight, 
   Mail, 
-  Phone,
   Landmark,
   ShieldCheck,
-  Printer
+  Printer,
+  RefreshCw,
+  FolderOpen,
+  Sparkles,
+  Users,
+  UserCheck
 } from 'lucide-react';
 import { Company, User } from '../types';
 import { ReportPrintModal, ReportColumn } from './ReportPrintModal';
+import { AppNavTab } from './Sidebar';
 
 interface CompaniesViewProps {
   currentCompany: Company;
   allCompanies: Company[];
+  allUsers?: (User & { company?: Company })[];
   currentUser: User;
   onSelectCompany: (company: Company) => void;
+  onQuickNavigate?: (company: Company, tab: AppNavTab) => void;
+  onRefreshCompanies?: () => Promise<void> | void;
   onOpenNewCompanyModal: () => void;
   onEditCompany: (company: Company) => void;
 }
@@ -26,13 +33,32 @@ interface CompaniesViewProps {
 export const CompaniesView: React.FC<CompaniesViewProps> = ({
   currentCompany,
   allCompanies,
+  allUsers = [],
   currentUser,
   onSelectCompany,
+  onQuickNavigate,
+  onRefreshCompanies,
   onOpenNewCompanyModal,
   onEditCompany,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [showReportModal, setShowReportModal] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const isMasterOrAdmin =
+    currentUser.role === 'admin' ||
+    currentUser.role === 'accountant' ||
+    currentUser.email.toLowerCase().trim() === 'rodrigobento1979@gmail.com';
+
+  const handleRefresh = async () => {
+    if (!onRefreshCompanies) return;
+    setRefreshing(true);
+    try {
+      await onRefreshCompanies();
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const companyReportColumns: ReportColumn[] = [
     { key: 'name', label: 'Razão Social', align: 'left' },
@@ -40,13 +66,15 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
     { key: 'cnpj', label: 'CNPJ', align: 'left' },
     { key: 'accountingSystem', label: 'Sistema Contábil', align: 'center', format: (val) => String(val || '').toUpperCase() },
     { key: 'contactEmail', label: 'E-mail de Contato', align: 'left' },
-    { key: 'phone', label: 'Telefone', align: 'left' },
+    { key: 'createdByEmail', label: 'Cadastrada Por', align: 'left', format: (val) => val ? String(val) : 'Administrador' },
   ];
 
   const filteredCompanies = allCompanies.filter(c => 
-    c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    c.fantasyName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    c.cnpj.includes(searchTerm)
+    (c.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (c.fantasyName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (c.cnpj || '').includes(searchTerm) ||
+    (c.createdByEmail || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (c.createdByName || '').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
@@ -62,12 +90,24 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
               Cadastro de Empresas & Carteira de Clientes
             </h1>
             <p className="text-xs text-slate-500">
-              Total de {allCompanies.length} empresas cadastradas sob a administração de <strong>{currentUser.email}</strong>
+              Total de <strong>{allCompanies.length}</strong> {allCompanies.length === 1 ? 'empresa cadastrada' : 'empresas cadastradas'} sob a administração de <strong>{currentUser.email}</strong>
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
+        <div className="flex flex-wrap items-center gap-2 shrink-0 self-start sm:self-auto">
+          {onRefreshCompanies && (
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition flex items-center gap-1.5 shadow-2xs cursor-pointer disabled:opacity-60"
+              title="Sincronizar empresas do servidor e da nuvem"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-teal-700 ${refreshing ? 'animate-spin' : ''}`} />
+              <span>Sincronizar</span>
+            </button>
+          )}
+
           <button
             onClick={() => setShowReportModal(true)}
             className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition flex items-center gap-1.5 shadow-2xs cursor-pointer"
@@ -86,6 +126,21 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Master Admin Broad Access Indicator */}
+      {isMasterOrAdmin && (
+        <div className="p-3 rounded-2xl bg-indigo-50/70 border border-indigo-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-indigo-950">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-indigo-600 shrink-0" />
+            <span>
+              <strong>Acesso Amplo Administrador Master Ativo:</strong> Você visualiza e gerencia <strong>todas</strong> as empresas do escritório e também todas as empresas cadastradas por clientes e usuários (Arquivos, OFX, Ativo Imobilizado, Plano de Contas e Honorários).
+            </span>
+          </div>
+          <span className="text-[10px] font-bold bg-indigo-600 text-white px-2.5 py-1 rounded-full shrink-0 self-start sm:self-auto">
+            {allCompanies.length} {allCompanies.length === 1 ? 'Empresa Global' : 'Empresas Globais'}
+          </span>
+        </div>
+      )}
 
       {/* Active Company Highlight Banner */}
       <div className="p-3.5 rounded-2xl bg-gradient-to-r from-teal-50/80 via-emerald-50/60 to-white border border-teal-200/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -115,7 +170,7 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
           <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
           <input
             type="text"
-            placeholder="Buscar empresa por razão social, nome fantasia ou CNPJ..."
+            placeholder="Buscar empresa por razão social, nome fantasia, CNPJ ou usuário que cadastrou..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-teal-500"
@@ -123,17 +178,17 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
         </div>
       </div>
 
-      {/* Structured List / Table (No Cards!) */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
+      {/* Structured List / Table */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-x-auto">
         <table className="w-full text-left text-xs border-collapse">
           <thead>
             <tr className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200 text-[11px]">
               <th className="py-2.5 px-3 sm:px-4">Empresa / Razão Social</th>
               <th className="py-2.5 px-3 hidden sm:table-cell">CNPJ</th>
               <th className="py-2.5 px-3 hidden md:table-cell">Sistema Contábil</th>
-              <th className="py-2.5 px-3 hidden lg:table-cell">Contato / E-mail</th>
+              <th className="py-2.5 px-3 hidden lg:table-cell">Contato & Origem</th>
               <th className="py-2.5 px-2 text-center">Status</th>
-              <th className="py-2.5 px-3 sm:px-4 text-right">Ação</th>
+              <th className="py-2.5 px-3 sm:px-4 text-right">Ações</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -146,6 +201,8 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
             ) : (
               filteredCompanies.map((comp) => {
                 const isActive = comp.id === currentCompany.id;
+                const linkedUsers = allUsers.filter(u => u.companyId === comp.id);
+                const creatorLabel = comp.createdByName || comp.createdByEmail;
                 return (
                   <tr key={comp.id} className={`hover:bg-slate-50/70 transition ${isActive ? 'bg-teal-50/30' : ''}`}>
                     <td className="py-3 px-3 sm:px-4">
@@ -154,6 +211,11 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
                         {isActive && (
                           <span className="text-[9px] font-bold bg-teal-100 text-teal-800 px-1.5 py-0.2 rounded shrink-0">
                             Ativa
+                          </span>
+                        )}
+                        {comp.id === 'comp-master' && (
+                          <span className="text-[9px] font-bold bg-[#00897b] text-white px-1.5 py-0.2 rounded shrink-0">
+                            Master
                           </span>
                         )}
                       </div>
@@ -175,14 +237,21 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
                       </span>
                     </td>
 
-                    <td className="py-3 px-3 hidden lg:table-cell text-slate-600 truncate max-w-[180px]">
+                    <td className="py-3 px-3 hidden lg:table-cell text-slate-600 max-w-[230px]">
                       <div className="flex items-center gap-1 truncate text-[11px]">
                         <Mail className="w-3 h-3 text-slate-400 shrink-0" />
                         <span className="truncate">{comp.contactEmail || '—'}</span>
                       </div>
-                      {comp.phone && (
-                        <div className="text-[10px] text-slate-400">
-                          {comp.phone}
+                      {creatorLabel && (
+                        <div className="text-[10px] text-indigo-700 font-medium flex items-center gap-1 truncate mt-0.5">
+                          <UserCheck className="w-3 h-3 shrink-0" />
+                          <span className="truncate">Por: {creatorLabel}</span>
+                        </div>
+                      )}
+                      {linkedUsers.length > 0 && (
+                        <div className="text-[10px] text-slate-500 flex items-center gap-1 mt-0.5">
+                          <Users className="w-3 h-3 text-teal-600 shrink-0" />
+                          <span>{linkedUsers.length} {linkedUsers.length === 1 ? 'usuário vinculado' : 'usuários vinculados'}</span>
                         </div>
                       )}
                     </td>
@@ -201,7 +270,32 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
                     </td>
 
                     <td className="py-3 px-3 sm:px-4 text-right whitespace-nowrap">
-                      <div className="inline-flex items-center gap-1.5 justify-end">
+                      <div className="inline-flex items-center gap-1 justify-end">
+                        {isMasterOrAdmin && onQuickNavigate && (
+                          <>
+                            <button
+                              onClick={() => onQuickNavigate(comp, 'documents')}
+                              className="p-1.5 rounded-lg bg-slate-100 hover:bg-teal-100 text-slate-600 hover:text-teal-800 transition cursor-pointer"
+                              title={`Abrir Arquivos de ${comp.fantasyName || comp.name}`}
+                            >
+                              <FolderOpen className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => onQuickNavigate(comp, 'ofx')}
+                              className="p-1.5 rounded-lg bg-slate-100 hover:bg-teal-100 text-slate-600 hover:text-teal-800 transition cursor-pointer"
+                              title={`Abrir Conversor OFX de ${comp.fantasyName || comp.name}`}
+                            >
+                              <Sparkles className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => onQuickNavigate(comp, 'assets')}
+                              className="p-1.5 rounded-lg bg-slate-100 hover:bg-teal-100 text-slate-600 hover:text-teal-800 transition cursor-pointer"
+                              title={`Abrir Ativo Imobilizado de ${comp.fantasyName || comp.name}`}
+                            >
+                              <Building2 className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        )}
                         <button
                           onClick={() => onEditCompany(comp)}
                           className="px-2.5 py-1 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"

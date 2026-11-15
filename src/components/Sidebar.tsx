@@ -17,7 +17,8 @@ import {
   Wrench,
   Settings,
   Landmark,
-  FolderOpen
+  FolderOpen,
+  HelpCircle
 } from 'lucide-react';
 import { User, Company } from '../types';
 import { ContSuiteLogo } from './ContSuiteLogo';
@@ -31,6 +32,7 @@ interface SidebarProps {
   setActiveTab: (tab: AppNavTab) => void;
   onOpenCompanyModal: () => void;
   onOpenUserModal: () => void;
+  onOpenHelpModal: () => void;
   onLogout: () => void;
 }
 
@@ -41,6 +43,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setActiveTab,
   onOpenCompanyModal,
   onOpenUserModal,
+  onOpenHelpModal,
   onLogout,
 }) => {
   const isAdmin = currentUser.role === 'admin';
@@ -349,6 +352,29 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </div>
 
+        {/* BOTÃO CENTRAL DE AJUDA & NOVIDADES ABAIXO DE CONFIGURAÇÕES */}
+        <div className="pt-2 border-t border-teal-800/40">
+          <button
+            type="button"
+            onClick={onOpenHelpModal}
+            className="w-full text-left px-3 py-2.5 rounded-xl bg-amber-400/20 hover:bg-amber-400/30 border border-amber-300/45 text-amber-50 transition cursor-pointer flex items-center justify-between text-xs shadow-sm"
+            title="Abrir Central de Ajuda, Novidades e Manual do ContSuite v1.0"
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              <HelpCircle className="w-4 h-4 text-amber-300 shrink-0" />
+              <div className="truncate">
+                <span className="block truncate font-bold text-white">Ajuda & Novidades</span>
+                <span className="text-[10px] text-amber-200/90 font-medium block truncate">
+                  Funções do Sistema · v1.0
+                </span>
+              </div>
+            </div>
+            <span className="px-1.5 py-0.5 rounded bg-amber-300 text-slate-950 font-black text-[9px] shrink-0">
+              v1.0
+            </span>
+          </button>
+        </div>
+
       </nav>
 
       {/* Footer / User Profile in Sidebar */}
@@ -370,6 +396,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </p>
             </div>
           </div>
+          <span className="text-[10px] font-mono text-teal-300/80 shrink-0">v1.0</span>
         </button>
 
         <button

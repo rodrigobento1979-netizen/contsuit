@@ -6,9 +6,7 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-export default defineConfig(async () => {
-  const { apiRouter } = await import('./src/server/api.ts');
-
+export default defineConfig(() => {
   return {
     plugins: [
       react(),
@@ -17,6 +15,7 @@ export default defineConfig(async () => {
         name: 'api-server-middleware',
         async configureServer(server: import('vite').ViteDevServer) {
           const express = (await import('express')).default;
+          const { apiRouter } = await import('./src/server/api.ts');
           const app = express();
           app.use('/api', apiRouter);
           server.middlewares.use(app);

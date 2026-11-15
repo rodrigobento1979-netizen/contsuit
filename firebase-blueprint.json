@@ -87,7 +87,19 @@
         },
         "accountingSystem": {
           "type": "string",
-          "enum": ["dominio", "questor", "fortes", "alterdata", "totvs", "sci", "outro"]
+          "enum": ["keevo", "ng_keevo", "dominio", "questor", "fortes", "alterdata", "totvs", "sci", "outro"]
+        },
+        "createdByUserId": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "createdByEmail": {
+          "type": "string",
+          "maxLength": 150
+        },
+        "createdByName": {
+          "type": "string",
+          "maxLength": 120
         },
         "createdAt": {
           "type": "string"
@@ -277,7 +289,7 @@
         },
         "status": {
           "type": "string",
-          "enum": ["pendente", "em_analise", "contabilizado"]
+          "enum": ["pendente", "em_analise", "contabilizado", "concluido"]
         },
         "competenceMonth": {
           "type": "string",
@@ -328,6 +340,22 @@
         "updatedAt": {
           "type": "string",
           "maxLength": 40
+        },
+        "ofxStatus": {
+          "type": "string",
+          "enum": ["idle", "queued", "processing", "done", "error"]
+        },
+        "ofxStatementId": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "ofxError": {
+          "type": "string",
+          "maxLength": 250
+        },
+        "sourceGroupLabel": {
+          "type": "string",
+          "maxLength": 120
         }
       },
       "required": ["companyId", "fileName", "mimeType", "fileSize", "category", "status", "competenceMonth", "aiClassified"]

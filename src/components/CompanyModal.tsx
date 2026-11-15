@@ -23,25 +23,55 @@ export const CompanyModal: React.FC<CompanyModalProps> = ({
   adminEmail,
   prefillData,
 }) => {
-  const [name, setName] = useState(companyToEdit?.name || prefillData?.name || '');
-  const [fantasyName, setFantasyName] = useState(companyToEdit?.fantasyName || prefillData?.fantasyName || '');
-  const [cnpj, setCnpj] = useState(companyToEdit?.cnpj || prefillData?.cnpj || '');
-  const [contactEmail, setContactEmail] = useState(companyToEdit?.contactEmail || '');
-  const [phone, setPhone] = useState(companyToEdit?.phone || '');
-  const [accountingSystem, setAccountingSystem] = useState<Company['accountingSystem']>(companyToEdit?.accountingSystem || 'dominio');
+  const [name, setName] = useState('');
+  const [fantasyName, setFantasyName] = useState('');
+  const [cnpj, setCnpj] = useState('');
+  const [contactEmail, setContactEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [accountingSystem, setAccountingSystem] = useState<Company['accountingSystem']>('dominio');
+  const [assetDefaultAccount, setAssetDefaultAccount] = useState('1.2.3.01.0001');
+  const [depreciationExpenseAccount, setDepreciationExpenseAccount] = useState('3.1.2.04.0010');
+  const [accumulatedDepreciationAccount, setAccumulatedDepreciationAccount] = useState('1.2.3.09.0001');
 
-  // Sync if prefillData changes while opening modal
+  // Reset or populate fields when modal opens or props change
   React.useEffect(() => {
-    if (prefillData && !companyToEdit) {
-      if (prefillData.name) setName(prefillData.name);
-      if (prefillData.cnpj) setCnpj(prefillData.cnpj);
-      if (prefillData.fantasyName) setFantasyName(prefillData.fantasyName);
+    if (isOpen) {
+      if (companyToEdit) {
+        setName(companyToEdit.name || '');
+        setFantasyName(companyToEdit.fantasyName || '');
+        setCnpj(companyToEdit.cnpj || '');
+        setContactEmail(companyToEdit.contactEmail || '');
+        setPhone(companyToEdit.phone || '');
+        setAccountingSystem(companyToEdit.accountingSystem || 'dominio');
+        setAssetDefaultAccount(companyToEdit.chartOfAccounts?.assetDefaultAccount || '1.2.3.01.0001');
+        setDepreciationExpenseAccount(companyToEdit.chartOfAccounts?.depreciationExpenseAccount || '3.1.2.04.0010');
+        setAccumulatedDepreciationAccount(companyToEdit.chartOfAccounts?.accumulatedDepreciationAccount || '1.2.3.09.0001');
+      } else if (prefillData) {
+        setName(prefillData.name || '');
+        setFantasyName(prefillData.fantasyName || '');
+        setCnpj(prefillData.cnpj || '');
+        setContactEmail('');
+        setPhone('');
+        setAccountingSystem('dominio');
+        setAssetDefaultAccount('1.2.3.01.0001');
+        setDepreciationExpenseAccount('3.1.2.04.0010');
+        setAccumulatedDepreciationAccount('1.2.3.09.0001');
+      } else {
+        setName('');
+        setFantasyName('');
+        setCnpj('');
+        setContactEmail('');
+        setPhone('');
+        setAccountingSystem('dominio');
+        setAssetDefaultAccount('1.2.3.01.0001');
+        setDepreciationExpenseAccount('3.1.2.04.0010');
+        setAccumulatedDepreciationAccount('1.2.3.09.0001');
+      }
+      setFormError(null);
     }
-  }, [prefillData, companyToEdit]);
+  }, [isOpen, companyToEdit, prefillData]);
 
-  const [assetDefaultAccount, setAssetDefaultAccount] = useState(companyToEdit?.chartOfAccounts?.assetDefaultAccount || '1.2.3.01.0001');
-  const [depreciationExpenseAccount, setDepreciationExpenseAccount] = useState(companyToEdit?.chartOfAccounts?.depreciationExpenseAccount || '3.1.2.04.0010');
-  const [accumulatedDepreciationAccount, setAccumulatedDepreciationAccount] = useState(companyToEdit?.chartOfAccounts?.accumulatedDepreciationAccount || '1.2.3.09.0001');
+
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -175,6 +205,8 @@ export const CompanyModal: React.FC<CompanyModalProps> = ({
                 onChange={(e) => setAccountingSystem(e.target.value as any)}
                 className="w-full p-2.5 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-teal-500"
               >
+                <option value="keevo">Keevo (Mastermaq)</option>
+                <option value="ng_keevo">NG Mastermaq</option>
                 <option value="dominio">Domínio Sistemas</option>
                 <option value="questor">Questor Contábil</option>
                 <option value="fortes">Fortes Tecnologia</option>

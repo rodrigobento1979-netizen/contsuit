@@ -24,11 +24,14 @@ import {
   Copy,
   Code,
   Check,
-  FileCode
+  FileCode,
 } from 'lucide-react';
 import { PDFDocument } from 'pdf-lib';
 import { Company, ConvertedStatement } from '../types';
 import { ReportPrintModal, ReportColumn } from './ReportPrintModal';
+import { PdfCanvasViewer } from './PdfCanvasViewer';
+import { useOfxAgent } from '../context/OfxAgentContext';
+import { getBlobFromIdb, saveBlobToIdb } from '../utils/fileStorage';
 
 /**
  * Robust fallback parser to reconstruct transactions list directly from OFX text
@@ -75,6 +78,7 @@ interface OfxConverterViewProps {
   onSelectCompany: (companyId: string) => void;
   historyStatements: ConvertedStatement[];
   onRefreshHistory: () => void;
+  onStatementDeleted?: (statementId: string) => Promise<void> | void;
   initialFile?: File | null;
   onConsumeInitialFile?: () => void;
 }
@@ -86,10 +90,26 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
   onSelectCompany,
   historyStatements,
   onRefreshHistory,
+  onStatementDeleted,
   initialFile,
   onConsumeInitialFile,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Context-backed persistent OFX job
+  const {
+    manualJob,
+    recentStatements,
+    markStatementDeleted,
+    startManualOfxConversion,
+    clearManualJob,
+    dismissUnregisteredPrompt,
+    skipUnregisteredCompany,
+  } = useOfxAgent();
+
+  useEffect(() => {
+    void onRefreshHistory();
+  }, [currentCompany.id, onRefreshHistory]);
 
   // Upload & File states
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -98,16 +118,27 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
   const [pdfPageCount, setPdfPageCount] = useState<number | null>(null);
   const [accountingAccount, setAccountingAccount] = useState<string>('');
 
-  // Processing state
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [processingProgress, setProcessingProgress] = useState<{
-    totalPages: number;
-    processedPages: number;
-    foundTransactions: number;
-    statusLabel: string;
+  // Derived persistent processing states (survive screen switches)
+  const [localErrorMessage, setLocalErrorMessage] = useState<string | null>(null);
+  const [localUnregisteredPrompt, setLocalUnregisteredPrompt] = useState<{
+    cnpj?: string;
+    companyName?: string;
+    pendingStatement?: ConvertedStatement;
   } | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [convertedResult, setConvertedResult] = useState<ConvertedStatement | null>(null);
+  const isProcessing = manualJob?.status === 'processing';
+  const processingProgress =
+    manualJob?.status === 'processing'
+      ? {
+          totalPages: manualJob.totalPages,
+          processedPages: manualJob.processedPages,
+          foundTransactions: manualJob.foundTransactions,
+          statusLabel: manualJob.statusLabel,
+        }
+      : null;
+  const convertedResult = manualJob?.status === 'done' ? manualJob.result || null : null;
+  const errorMessage =
+    localErrorMessage || (manualJob?.status === 'error' ? manualJob.error || null : null);
+  const unregisteredPrompt = manualJob?.unregisteredPrompt || localUnregisteredPrompt;
   const [isDragOver, setIsDragOver] = useState(false);
 
   // Date Filters & Search for imported statements cards
@@ -121,54 +152,49 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
   const [previewFilterType, setPreviewFilterType] = useState<'ALL' | 'CREDIT' | 'DEBIT'>('ALL');
   const [previewSearchTerm, setPreviewSearchTerm] = useState<string>('');
   const [copiedOfx, setCopiedOfx] = useState(false);
-  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+  const [loadingOriginalDoc, setLoadingOriginalDoc] = useState(false);
 
-  // Synchronize Blob URL for PDF preview without data: URI restrictions in Chrome
+  // Hydrate original PDF/image base64 for Preview Modal (fileBase64 -> IDB stmt.id -> IDB sourceDocId -> API)
   useEffect(() => {
-    if (previewStatement?.fileBase64 && !previewStatement.fileMimeType?.includes('image')) {
+    if (!previewStatement || previewStatement.fileBase64) return;
+    let cancelled = false;
+    const hydrateBinary = async () => {
+      setLoadingOriginalDoc(true);
       try {
-        const byteCharacters = atob(previewStatement.fileBase64);
-        const byteNumbers = new Array(byteCharacters.length);
-        for (let i = 0; i < byteCharacters.length; i++) {
-          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        let b64: string | null = null;
+        if (previewStatement.id) {
+          b64 = await getBlobFromIdb(previewStatement.id);
         }
-        const byteArray = new Uint8Array(byteNumbers);
-        const blob = new Blob([byteArray], { type: previewStatement.fileMimeType || 'application/pdf' });
-        const url = URL.createObjectURL(blob);
-        setPdfBlobUrl(url);
-        return () => URL.revokeObjectURL(url);
-      } catch (e) {
-        console.error('Failed to create PDF blob url', e);
-        setPdfBlobUrl(null);
-      }
-    } else {
-      setPdfBlobUrl(null);
-    }
-  }, [previewStatement]);
-
-  // Lazy-load original fileBase64 if omitted from lightweight /api/ofx/history list
-  useEffect(() => {
-    if (
-      previewTab === 'document' &&
-      previewStatement &&
-      !previewStatement.fileBase64 &&
-      previewStatement.hasOriginalFile &&
-      previewStatement.id
-    ) {
-      let cancelled = false;
-      fetch(`/api/ofx/statements/${previewStatement.id}`)
-        .then(r => (r.ok ? r.json() : null))
-        .then(full => {
-          if (!cancelled && full?.fileBase64) {
-            setPreviewStatement(prev => (prev && prev.id === full.id ? { ...prev, fileBase64: full.fileBase64 } : prev));
+        if (!b64 && previewStatement.sourceDocId) {
+          b64 = await getBlobFromIdb(previewStatement.sourceDocId);
+        }
+        if (!b64 && previewStatement.id) {
+          const r = await fetch(`/api/ofx/statements/${previewStatement.id}`, { cache: 'no-store' });
+          if (r.ok) {
+            const full = await r.json();
+            if (full?.fileBase64) {
+              b64 = full.fileBase64;
+              await saveBlobToIdb(previewStatement.id, full.fileBase64);
+            }
           }
-        })
-        .catch(() => {});
-      return () => {
-        cancelled = true;
-      };
-    }
-  }, [previewTab, previewStatement]);
+        }
+        if (!cancelled && b64) {
+          setPreviewStatement((prev) =>
+            prev && prev.id === previewStatement.id
+              ? { ...prev, fileBase64: b64!, hasOriginalFile: true }
+              : prev
+          );
+        }
+      } catch {
+      } finally {
+        if (!cancelled) setLoadingOriginalDoc(false);
+      }
+    };
+    void hydrateBinary();
+    return () => {
+      cancelled = true;
+    };
+  }, [previewStatement?.id, previewStatement?.fileBase64, previewStatement?.sourceDocId, previewTab]);
 
   // Robust transactions array for the preview modal (with automatic fallback to OFX parser)
   const previewTransactions = useMemo(() => {
@@ -207,6 +233,37 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
     }
   };
 
+  const handleOpenPreview = async (stmt: ConvertedStatement, initialTab: 'transactions' | 'ofx' | 'document' = 'transactions') => {
+    setPreviewStatement(stmt);
+    setPreviewTab(initialTab);
+    if (!stmt.fileBase64) {
+      try {
+        let b64 = stmt.id ? await getBlobFromIdb(stmt.id) : null;
+        if (!b64 && stmt.sourceDocId) {
+          b64 = await getBlobFromIdb(stmt.sourceDocId);
+        }
+        if (b64) {
+          setPreviewStatement((prev) =>
+            prev && prev.id === stmt.id ? { ...prev, fileBase64: b64!, hasOriginalFile: true } : prev
+          );
+          return;
+        }
+        if (stmt.id && (stmt.hasOriginalFile || stmt.sourceDocId)) {
+          const res = await fetch(`/api/ofx/statements/${stmt.id}`, { cache: 'no-store' });
+          if (res.ok) {
+            const fullStmt = await res.json();
+            if (fullStmt?.fileBase64) {
+              await saveBlobToIdb(stmt.id, fullStmt.fileBase64);
+            }
+            setPreviewStatement(fullStmt);
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to hydrate statement preview binary:', e);
+      }
+    }
+  };
+
   // Delete confirmation state
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -215,18 +272,13 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
   const [reportStatement, setReportStatement] = useState<ConvertedStatement | null>(null);
   const [showConsolidatedReport, setShowConsolidatedReport] = useState(false);
 
-  // Unregistered Company Detection Modal State
-  const [unregisteredPrompt, setUnregisteredPrompt] = useState<{
-    cnpj?: string;
-    companyName?: string;
-    pendingStatement?: ConvertedStatement;
-  } | null>(null);
-
   // File handling
   const handleFileSelect = (file: File) => {
     setSelectedFile(file);
-    setErrorMessage(null);
-    setConvertedResult(null);
+    setLocalErrorMessage(null);
+    if (manualJob?.status !== 'processing') {
+      clearManualJob();
+    }
     setPdfPageCount(null);
 
     const reader = new FileReader();
@@ -248,7 +300,7 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
       }
     };
     reader.onerror = () => {
-      setErrorMessage('Erro ao ler o arquivo selecionado.');
+      setLocalErrorMessage('Erro ao ler o arquivo selecionado.');
     };
     reader.readAsDataURL(file);
 
@@ -272,7 +324,7 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
           });
 
           if (!exists) {
-            setUnregisteredPrompt({
+            setLocalUnregisteredPrompt({
               cnpj: detectedCnpj,
               companyName: detectedOrg || file.name.replace(/\.[^/.]+$/, ''),
             });
@@ -313,369 +365,30 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
     setFileBase64(null);
     setFileMimeType(null);
     setPdfPageCount(null);
-    setConvertedResult(null);
-    setErrorMessage(null);
-    setProcessingProgress(null);
-    setUnregisteredPrompt(null);
+    setLocalErrorMessage(null);
+    setLocalUnregisteredPrompt(null);
+    if (manualJob?.status !== 'processing') {
+      clearManualJob();
+    }
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
   };
 
-  // Helper to convert Uint8Array to base64 safely in browser
-  const uint8ToBase64 = (bytes: Uint8Array): string => {
-    let binary = '';
-    const chunkSize = 0x4000;
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-    }
-    return btoa(binary);
-  };
-
-  // Helper: Safe JSON parser that handles Vercel HTML/text error responses (413, 502, 504, 500) cleanly
-  const parseSafeJson = async (res: Response): Promise<any> => {
-    const rawText = await res.text();
-    try {
-      return rawText ? JSON.parse(rawText) : {};
-    } catch {
-      if (res.status === 413) {
-        throw new Error('O bloco de páginas/arquivo excedeu o limite de envio (4,5 MB). Tente um arquivo menor.');
-      }
-      if (res.status === 504 || res.status === 502) {
-        throw new Error('O servidor demorou para responder (Timeout). Tente processar novamente em instantes.');
-      }
-      throw new Error(`Erro no servidor (${res.status}): ${rawText.slice(0, 140) || 'Resposta inválida.'}`);
-    }
-  };
-
-  // Helper: Compress large photos/images so they stay well below Vercel's 4.5MB limit
-  const compressImageIfNeeded = async (b64: string, mime: string): Promise<{ base64: string; mimeType: string }> => {
-    if (!mime.startsWith('image/') || b64.length < 1_400_000) {
-      return { base64: b64, mimeType: mime === 'image/jpg' ? 'image/jpeg' : mime };
-    }
-    try {
-      const img = new Image();
-      await new Promise<void>((resolve, reject) => {
-        img.onload = () => resolve();
-        img.onerror = () => reject(new Error('Falha ao carregar imagem para otimização'));
-        img.src = `data:${mime};base64,${b64}`;
-      });
-      const maxDim = 1800;
-      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.round(img.width * scale));
-      canvas.height = Math.max(1, Math.round(img.height * scale));
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return { base64: b64, mimeType: mime };
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      const outUrl = canvas.toDataURL('image/jpeg', 0.85);
-      return { base64: outUrl.split(',')[1] || b64, mimeType: 'image/jpeg' };
-    } catch {
-      return { base64: b64, mimeType: mime };
-    }
-  };
-
-  // Convert with AI (automatic byte-safe multi-page chunking for PDFs)
+  // Convert with persistent OfxAgentContext (continues running if user leaves screen & restores automatically)
   const handleConvert = async () => {
-    if (!fileBase64 && !selectedFile) {
-      setErrorMessage('Por favor, selecione ou arraste um arquivo de extrato bancário.');
+    if (!fileBase64 || !selectedFile) {
+      setLocalErrorMessage('Por favor, selecione ou arraste um arquivo de extrato bancário.');
       return;
     }
-
-    setIsProcessing(true);
-    setErrorMessage(null);
-    setProcessingProgress(null);
-
-    try {
-      const fileNameLower = (selectedFile?.name || '').toLowerCase();
-      const isPdf = fileMimeType === 'application/pdf' || fileNameLower.endsWith('.pdf');
-      const isPlainTextOrOfx =
-        fileNameLower.endsWith('.txt') ||
-        fileNameLower.endsWith('.ofx') ||
-        fileNameLower.endsWith('.csv') ||
-        (fileMimeType || '').startsWith('text/');
-
-      let finalData: any = null;
-
-      // Multi-page PDF handling: read first batch for bank/year context, then byte-safe chunks (max 3 pages & < 2.4MB base64)
-      if (isPdf && selectedFile) {
-        let srcPdf: PDFDocument | null = null;
-        let totalPages = 0;
-        try {
-          const ab = await selectedFile.arrayBuffer();
-          srcPdf = await PDFDocument.load(ab, { ignoreEncryption: true });
-          totalPages = srcPdf.getPageCount();
-          setPdfPageCount(totalPages);
-        } catch (pdfLoadErr) {
-          console.warn('Falha ao fatiar PDF no navegador, enviando arquivo completo:', pdfLoadErr);
-          srcPdf = null;
-          totalPages = 0;
-        }
-
-        if (srcPdf && totalPages > 1) {
-          const MAX_CHUNK_BASE64 = 2_400_000; // safely below Vercel's 4.5MB limit
-          const DEFAULT_BATCH = totalPages > 2 ? 3 : 2;
-
-          const buildSliceBase64 = async (start: number, end: number) => {
-            const subDoc = await PDFDocument.create();
-            const indices: number[] = [];
-            for (let p = start; p <= end; p++) indices.push(p);
-            const copied = await subDoc.copyPages(srcPdf!, indices);
-            copied.forEach(p => subDoc.addPage(p));
-            const subBytes = await subDoc.save();
-            return uint8ToBase64(subBytes);
-          };
-
-          // Build size-checked ranges so even heavy scanned PDFs never trigger 413 on Vercel
-          const chunkQueue: { start: number; end: number; prebuiltB64?: string }[] = [];
-          const splitRangeToFit = async (start: number, end: number) => {
-            const b64 = await buildSliceBase64(start, end);
-            if (b64.length <= MAX_CHUNK_BASE64 || start === end) {
-              if (b64.length > 3_600_000) {
-                throw new Error(
-                  `A página ${start + 1} do PDF possui imagem muito pesada (${(b64.length / 1_000_000).toFixed(1)} MB) e excede o limite de upload do servidor.`
-                );
-              }
-              chunkQueue.push({ start, end, prebuiltB64: b64 });
-              return;
-            }
-            const mid = Math.floor((start + end) / 2);
-            await splitRangeToFit(start, mid);
-            await splitRangeToFit(mid + 1, end);
-          };
-
-          if (totalPages > 2 || (fileBase64 && fileBase64.length > MAX_CHUNK_BASE64)) {
-            setProcessingProgress({
-              totalPages,
-              processedPages: 0,
-              foundTransactions: 0,
-              statusLabel: `Preparando lotes seguros de ${totalPages} páginas...`,
-            });
-
-            for (let i = 0; i < totalPages; i += DEFAULT_BATCH) {
-              await splitRangeToFit(i, Math.min(i + DEFAULT_BATCH - 1, totalPages - 1));
-            }
-
-            const extractRange = async (
-              range: { start: number; end: number; prebuiltB64?: string },
-              contextHint?: string
-            ) => {
-              const chunkBase64 = range.prebuiltB64 || (await buildSliceBase64(range.start, range.end));
-
-              let lastError: any = null;
-              for (let attempt = 0; attempt < 2; attempt++) {
-                try {
-                  const chunkRes = await fetch('/api/ofx/extract-chunk', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      fileBase64: chunkBase64,
-                      mimeType: 'application/pdf',
-                      bankHint: contextHint,
-                    }),
-                  });
-                  const chunkJson = await parseSafeJson(chunkRes);
-                  if (!chunkRes.ok || !chunkJson.extraction) {
-                    const err = new Error(
-                      chunkJson.error || `Falha ao ler páginas ${range.start + 1}-${range.end + 1} de ${totalPages}`
-                    ) as Error & { noRetry?: boolean };
-                    if (
-                      chunkRes.status === 429 ||
-                      chunkRes.status === 403 ||
-                      chunkRes.status === 400 ||
-                      chunkRes.status === 413
-                    ) {
-                      err.noRetry = true;
-                    }
-                    throw err;
-                  }
-                  return chunkJson.extraction;
-                } catch (err: any) {
-                  lastError = err;
-                  if (err?.noRetry || attempt === 1) {
-                    throw err;
-                  }
-                  await new Promise(r => setTimeout(r, 800));
-                }
-              }
-              throw lastError;
-            };
-
-            const extractedChunks: any[] = new Array(chunkQueue.length);
-            const baseHint = accountingAccount ? `Conta contábil: ${accountingAccount}` : '';
-            const firstRange = chunkQueue[0];
-            const firstLabel =
-              firstRange.start === firstRange.end
-                ? `página ${firstRange.start + 1}`
-                : `páginas ${firstRange.start + 1} a ${firstRange.end + 1}`;
-
-            setProcessingProgress({
-              totalPages,
-              processedPages: 0,
-              foundTransactions: 0,
-              statusLabel: `Lendo ${firstLabel} de ${totalPages} (cabeçalho e lançamentos iniciais)...`,
-            });
-
-            // 1. Read first batch first to capture Bank, Agency, Account, CNPJ, and Year
-            const firstExtraction = await extractRange(firstRange, baseHint || undefined);
-            extractedChunks[0] = firstExtraction;
-
-            let processedPages = firstRange.end - firstRange.start + 1;
-            let foundTransactions = firstExtraction?.transactions?.length || 0;
-
-            const inferredYear =
-              (firstExtraction?.startDate && /^\d{4}/.test(firstExtraction.startDate)
-                ? firstExtraction.startDate.slice(0, 4)
-                : '') ||
-              (firstExtraction?.transactions?.[0]?.date && /^\d{4}/.test(firstExtraction.transactions[0].date)
-                ? firstExtraction.transactions[0].date.slice(0, 4)
-                : '');
-
-            const sharedContextParts = [
-              baseHint,
-              firstExtraction?.bankName ? `Banco: ${firstExtraction.bankName} (${firstExtraction.bankCode || ''})` : '',
-              firstExtraction?.agency ? `Agência: ${firstExtraction.agency}` : '',
-              firstExtraction?.accountNumber ? `Conta: ${firstExtraction.accountNumber}` : '',
-              inferredYear ? `Ano do extrato: ${inferredYear} (use este ano se a página mostrar apenas DD/MM)` : '',
-            ].filter(Boolean);
-            const sharedContextHint = sharedContextParts.join(' | ') || undefined;
-
-            setProcessingProgress({
-              totalPages,
-              processedPages,
-              foundTransactions,
-              statusLabel: `${processedPages} de ${totalPages} páginas lidas • ${foundTransactions} lançamentos extraídos`,
-            });
-
-            // 2. Read remaining batches in parallel (concurrency = 2)
-            const CONCURRENCY = 2;
-            for (let i = 1; i < chunkQueue.length; i += CONCURRENCY) {
-              const batchSlice = chunkQueue.slice(i, i + CONCURRENCY);
-              const rangeLabel = batchSlice
-                .map(r => (r.start === r.end ? `pág. ${r.start + 1}` : `págs. ${r.start + 1}-${r.end + 1}`))
-                .join(' e ');
-
-              setProcessingProgress({
-                totalPages,
-                processedPages,
-                foundTransactions,
-                statusLabel: `Lendo ${rangeLabel} de ${totalPages} com IA...`,
-              });
-
-              const settled = await Promise.all(
-                batchSlice.map(async (range, offset) => ({
-                  idx: i + offset,
-                  pageCount: range.end - range.start + 1,
-                  extraction: await extractRange(range, sharedContextHint),
-                }))
-              );
-
-              for (const item of settled) {
-                extractedChunks[item.idx] = item.extraction;
-                processedPages += item.pageCount;
-                foundTransactions += item.extraction?.transactions?.length || 0;
-              }
-
-              setProcessingProgress({
-                totalPages,
-                processedPages,
-                foundTransactions,
-                statusLabel: `${processedPages} de ${totalPages} páginas lidas • ${foundTransactions} lançamentos extraídos`,
-              });
-            }
-
-            setProcessingProgress({
-              totalPages,
-              processedPages: totalPages,
-              foundTransactions,
-              statusLabel: `Consolidando ${foundTransactions} lançamentos e gerando arquivo OFX...`,
-            });
-
-            const finalizeRes = await fetch('/api/ofx/finalize', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                chunks: extractedChunks,
-                totalPages,
-                pagesProcessed: totalPages,
-                companyId: currentCompany.id,
-                fileName: selectedFile.name,
-                // Keep original PDF in history only if well below Vercel 4.5MB limit alongside chunks JSON
-                fileBase64: fileBase64 && fileBase64.length < 1_500_000 ? fileBase64 : undefined,
-                mimeType: 'application/pdf',
-              }),
-            });
-            const finalizeData = await parseSafeJson(finalizeRes);
-            if (!finalizeRes.ok) {
-              throw new Error(finalizeData.error || 'Erro ao consolidar páginas do extrato.');
-            }
-            finalData = finalizeData;
-          }
-        }
-      }
-
-      // Single-request path for images, TXT/OFX, or small 1–2 page PDFs
-      if (!finalData) {
-        let payloadBody: any = {
-          fileName: selectedFile?.name || 'extrato_bancario.pdf',
-          bankHint: accountingAccount ? `Conta contábil: ${accountingAccount}` : undefined,
-          companyId: currentCompany.id,
-        };
-
-        if (isPlainTextOrOfx && selectedFile) {
-          payloadBody.rawText = await selectedFile.text();
-        } else if (fileBase64) {
-          const prepared = await compressImageIfNeeded(fileBase64, fileMimeType || 'application/pdf');
-          if (prepared.base64.length > 3_400_000) {
-            throw new Error(
-              'O arquivo selecionado ultrapassa o limite de envio de 3,4 MB. Reduza a resolução ou divida o PDF.'
-            );
-          }
-          payloadBody.fileBase64 = prepared.base64;
-          payloadBody.mimeType = prepared.mimeType;
-        }
-
-        const response = await fetch('/api/ofx/convert', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payloadBody),
-        });
-
-        const data = await parseSafeJson(response);
-        if (!response.ok) {
-          throw new Error(data.error || 'Erro ao processar o extrato com IA.');
-        }
-        finalData = data;
-      }
-
-      // Check if statement contains CNPJ or company info that is NOT registered
-      const detectedCnpj = finalData.statement?.extractedCnpj || finalData.statement?.detectedCnpj;
-      const detectedOrg = finalData.statement?.extractedCompanyName || finalData.statement?.bankName || finalData.statement?.companyName;
-
-      let companyFound = true;
-      if (detectedCnpj) {
-        const cleanDetected = detectedCnpj.replace(/\D/g, '');
-        const exists = allCompanies.some(c => c.cnpj.replace(/\D/g, '') === cleanDetected);
-        if (!exists) companyFound = false;
-      }
-
-      if (!companyFound && detectedCnpj) {
-        setUnregisteredPrompt({
-          cnpj: detectedCnpj,
-          companyName: detectedOrg || 'Empresa Identificada no Extrato',
-          pendingStatement: finalData.statement,
-        });
-      } else {
-        setConvertedResult(finalData.statement);
-        onRefreshHistory();
-      }
-    } catch (err: any) {
-      console.error('Error converting statement:', err);
-      setErrorMessage(err.message || 'Erro inesperado ao converter extrato.');
-    } finally {
-      setIsProcessing(false);
-      setProcessingProgress(null);
-    }
+    setLocalErrorMessage(null);
+    await startManualOfxConversion({
+      file: selectedFile,
+      fileBase64,
+      mimeType: fileMimeType || selectedFile.type || 'application/pdf',
+      accountingAccount,
+      companyId: currentCompany.id,
+    });
   };
 
   // Delete Statement handler
@@ -683,14 +396,16 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
     setDeleteLoading(true);
     try {
       const res = await fetch(`/api/ofx/statements/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Falha ao excluir extrato.');
+      if (!res.ok && res.status !== 404) throw new Error('Falha ao excluir extrato.');
+      markStatementDeleted(id);
+      await onStatementDeleted?.(id);
       setDeletingId(null);
       if (convertedResult?.id === id) {
-        setConvertedResult(null);
+        clearManualJob();
       }
       onRefreshHistory();
     } catch (err: any) {
-      alert(err.message || 'Erro ao excluir extrato.');
+      setLocalErrorMessage(err.message || 'Erro ao excluir extrato.');
     } finally {
       setDeleteLoading(false);
     }
@@ -705,19 +420,14 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
       fantasyName: unregisteredPrompt.companyName || 'Nova Empresa',
     };
 
-    if (unregisteredPrompt.pendingStatement) {
-      setConvertedResult(unregisteredPrompt.pendingStatement);
-    }
-    setUnregisteredPrompt(null);
+    setLocalUnregisteredPrompt(null);
+    dismissUnregisteredPrompt();
     onOpenCompanyModalWithData(prefill);
   };
 
   const handleSkipCompanyRegistration = () => {
-    if (unregisteredPrompt?.pendingStatement) {
-      setConvertedResult(unregisteredPrompt.pendingStatement);
-      onRefreshHistory();
-    }
-    setUnregisteredPrompt(null);
+    setLocalUnregisteredPrompt(null);
+    skipUnregisteredCompany();
   };
 
   // Download OFX
@@ -736,9 +446,27 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
     URL.revokeObjectURL(url);
   };
 
+  // Merge context recentStatements + historyStatements so conversions from Arquivos appear immediately
+  const combinedHistory = useMemo(() => {
+    const map = new Map<string, ConvertedStatement>();
+    historyStatements.forEach((s) => {
+      if (s && s.id) map.set(s.id, s);
+    });
+    recentStatements.forEach((s) => {
+      if (s && s.id && (!s.companyId || s.companyId === currentCompany.id)) {
+        map.set(s.id, { ...map.get(s.id), ...s });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => {
+      const ta = a.uploadedAt ? new Date(a.uploadedAt).getTime() : 0;
+      const tb = b.uploadedAt ? new Date(b.uploadedAt).getTime() : 0;
+      return tb - ta;
+    });
+  }, [historyStatements, recentStatements, currentCompany.id]);
+
   // Filtered statements list based on date filters and bank search
   const filteredHistory = useMemo(() => {
-    return historyStatements.filter((stmt) => {
+    return combinedHistory.filter((stmt) => {
       // Date filter check
       if (startDateFilter && stmt.endDate && stmt.endDate < startDateFilter) {
         return false;
@@ -755,7 +483,7 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
       }
       return true;
     });
-  }, [historyStatements, startDateFilter, endDateFilter, searchBankTerm]);
+  }, [combinedHistory, startDateFilter, endDateFilter, searchBankTerm]);
 
   // Table columns for the report modal
   const statementReportColumns: ReportColumn[] = [
@@ -853,7 +581,10 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
                 </div>
               </div>
               <button
-                onClick={() => setUnregisteredPrompt(null)}
+                onClick={() => {
+                  setLocalUnregisteredPrompt(null);
+                  dismissUnregisteredPrompt();
+                }}
                 className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
               >
                 <X className="w-4 h-4" />
@@ -997,13 +728,16 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
           )}
         </div>
 
-        {/* Multi-page progress indicator */}
+        {/* Restored/Active Multi-page progress indicator (persists if user switched tabs) */}
         {isProcessing && processingProgress && (
           <div className="p-3 rounded-xl bg-teal-50/90 border border-teal-200 space-y-1.5">
             <div className="flex items-center justify-between text-[11px] font-bold text-teal-900">
               <span className="flex items-center gap-1.5">
                 <Loader2 className="w-3.5 h-3.5 animate-spin text-teal-600" />
-                {processingProgress.statusLabel}
+                <span>
+                  {manualJob?.fileName ? `${manualJob.fileName} — ` : ''}
+                  {processingProgress.statusLabel}
+                </span>
               </span>
               <span className="font-mono text-teal-700">
                 {Math.round((processingProgress.processedPages / Math.max(1, processingProgress.totalPages)) * 100)}%
@@ -1017,6 +751,12 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
                 }}
               />
             </div>
+          </div>
+        )}
+
+        {manualJob?.splitInfoMessage && (
+          <div className="p-2.5 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-900 text-xs font-medium">
+            {manualJob.splitInfoMessage}
           </div>
         )}
 
@@ -1083,10 +823,7 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
-                onClick={() => {
-                  setPreviewStatement(convertedResult);
-                  setPreviewTab('transactions');
-                }}
+                onClick={() => void handleOpenPreview(convertedResult, 'transactions')}
                 className="px-3 py-1.5 rounded-lg border border-teal-200 bg-teal-50 hover:bg-teal-100 text-teal-800 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
                 title="Visualizar extrato, lançamentos e código OFX"
               >
@@ -1149,7 +886,7 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
             <Filter className="w-3.5 h-3.5 text-[#00897b]" />
             <span>Filtros dos Extratos Importados</span>
             <span className="text-[10px] text-slate-400 font-normal ml-1">
-              ({filteredHistory.length} de {historyStatements.length} encontrados)
+              ({filteredHistory.length} de {combinedHistory.length} encontrados)
             </span>
           </div>
 
@@ -1320,10 +1057,7 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
                           {/* Visualizar Extrato / OFX */}
                           <button
                             type="button"
-                            onClick={() => {
-                              setPreviewStatement(stmt);
-                              setPreviewTab('transactions');
-                            }}
+                            onClick={() => handleOpenPreview(stmt)}
                             className="p-1.5 rounded-lg border border-slate-200 hover:bg-teal-50 hover:text-teal-800 hover:border-teal-200 text-slate-600 transition cursor-pointer"
                             title="Visualizar Extrato, Lançamentos e OFX"
                           >
@@ -1410,10 +1144,7 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
                   <div className="flex items-center gap-1.5 pt-1">
                     <button
                       type="button"
-                      onClick={() => {
-                        setPreviewStatement(stmt);
-                        setPreviewTab('transactions');
-                      }}
+                      onClick={() => handleOpenPreview(stmt)}
                       className="flex-1 py-1 px-2 rounded-lg border border-slate-200 text-slate-700 text-[11px] font-semibold flex items-center justify-center gap-1"
                     >
                       <Eye className="w-3 h-3 text-teal-600" />
@@ -1536,7 +1267,7 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
                 <span>Código OFX (XML/SGML)</span>
               </button>
 
-              {(previewStatement.fileBase64 || previewStatement.hasOriginalFile) && (
+              {(previewStatement.fileBase64 || previewStatement.hasOriginalFile || previewStatement.sourceDocId) && (
                 <button
                   type="button"
                   onClick={() => setPreviewTab('document')}
@@ -1711,76 +1442,33 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
               {/* TAB 3: ORIGINAL DOCUMENT / PDF */}
               {previewTab === 'document' && (
                 <div className="space-y-2.5">
-                  <div className="bg-white p-3 rounded-xl border border-slate-200 flex items-center justify-between gap-2">
-                    <div>
-                      <span className="text-xs font-bold text-slate-800 block">
-                        Documento Anexo: {previewStatement.originalFileName || 'extrato'}
-                      </span>
-                      <span className="text-[10px] text-slate-400">
-                        Formato: {previewStatement.fileMimeType || 'application/pdf'}
-                      </span>
-                    </div>
-                    {pdfBlobUrl && (
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => window.open(pdfBlobUrl, '_blank')}
-                          className="px-3 py-1.5 rounded-lg border border-teal-200 bg-teal-50 hover:bg-teal-100 text-teal-800 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5" />
-                          <span>Abrir em Nova Aba</span>
-                        </button>
-                        <a
-                          href={pdfBlobUrl}
-                          download={previewStatement.originalFileName || 'extrato.pdf'}
-                          className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center gap-1.5 transition"
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                          <span>Baixar Original</span>
-                        </a>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="bg-white rounded-xl p-3 border border-slate-200 flex items-center justify-center min-h-[480px]">
-                    {previewStatement.fileBase64 ? (
-                      previewStatement.fileMimeType?.includes('image') ? (
+                  {previewStatement.fileBase64 ? (
+                    previewStatement.fileMimeType?.includes('image') ? (
+                      <div className="bg-white rounded-xl p-3 border border-slate-200 flex items-center justify-center min-h-[480px]">
                         <img
                           src={`data:${previewStatement.fileMimeType || 'image/png'};base64,${previewStatement.fileBase64}`}
                           alt="Extrato Original"
                           className="max-h-[580px] max-w-full rounded-lg shadow-sm border border-slate-200 object-contain mx-auto"
                         />
-                      ) : (
-                        <object
-                          data={pdfBlobUrl || `data:application/pdf;base64,${previewStatement.fileBase64}`}
-                          type="application/pdf"
-                          className="w-full h-[580px] rounded-lg border border-slate-200"
-                        >
-                          <div className="p-8 text-center text-slate-500 space-y-3">
-                            <p className="text-xs">O visualizador embutido do navegador não suportou renderizar o PDF nesta janela.</p>
-                            {pdfBlobUrl && (
-                              <button
-                                type="button"
-                                onClick={() => window.open(pdfBlobUrl, '_blank')}
-                                className="px-4 py-2 bg-teal-600 text-white rounded-lg text-xs font-bold cursor-pointer"
-                              >
-                                Clique aqui para abrir o PDF diretamente
-                              </button>
-                            )}
-                          </div>
-                        </object>
-                      )
-                    ) : previewStatement.hasOriginalFile ? (
-                      <div className="p-8 text-center text-slate-500 text-xs flex flex-col items-center gap-2">
-                        <Loader2 className="w-5 h-5 animate-spin text-teal-600" />
-                        <span>Carregando documento original...</span>
                       </div>
                     ) : (
-                      <div className="p-8 text-center text-slate-400 text-xs">
-                        Nenhum documento original em base64 anexado a este registro.
-                      </div>
-                    )}
-                  </div>
+                      <PdfCanvasViewer
+                        base64={previewStatement.fileBase64}
+                        fileName={previewStatement.originalFileName || 'extrato.pdf'}
+                        mimeType={previewStatement.fileMimeType || 'application/pdf'}
+                        maxHeightClass="h-[540px]"
+                      />
+                    )
+                  ) : loadingOriginalDoc ? (
+                    <div className="bg-white rounded-xl p-8 border border-slate-200 text-center text-slate-500 text-xs flex flex-col items-center justify-center gap-2 min-h-[320px]">
+                      <Loader2 className="w-5 h-5 animate-spin text-teal-600" />
+                      <span>Carregando documento original...</span>
+                    </div>
+                  ) : (
+                    <div className="bg-white rounded-xl p-8 border border-slate-200 text-center text-slate-400 text-xs min-h-[240px] flex items-center justify-center">
+                      Nenhum documento original anexado ou disponível localmente para este registro.
+                    </div>
+                  )}
                 </div>
               )}
             </div>

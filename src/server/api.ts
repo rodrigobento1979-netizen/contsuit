@@ -4,6 +4,7 @@ import {
   getCompanyById,
   createCompany,
   updateCompany,
+  upsertCompany,
   getUsers,
   getUserById,
   getUserByEmail,
@@ -39,7 +40,11 @@ import {
   updateDocument,
   deleteDocument,
 } from './db.ts';
-import { classifyDocumentWithAI } from './document-ai.ts';
+import {
+  classifyDocumentWithAI,
+  analyzePdfPagesWithAI,
+  processNonExtratoDocumentWithAI,
+} from './document-ai.ts';
 import {
   calculateDepreciationForPeriod,
   exportToDominioSistemas,
@@ -63,9 +68,20 @@ import {
   saveSmtpConfig,
   testSmtpConnection,
   SmtpConfig,
+  getInboxConfig,
+  saveInboxConfig,
+  InboxImapConfig,
 } from './email.ts';
+import {
+  testInboxConnection,
+  syncEmailInbox,
+  startInboxBackgroundPoller,
+} from './email-ingest.ts';
 
 export const apiRouter = express.Router();
+
+// Start automatic IMAP inbox polling in the background (dev & prod)
+startInboxBackgroundPoller();
 
 // Stream-safe body parser compatible with both Vite Connect, Vercel Serverless, and standalone Express
 apiRouter.use((req: any, res: any, next: any) => {
@@ -222,6 +238,8 @@ apiRouter.post('/users/invite', async (req: Request, res: Response) => {
         contactEmail: email,
         phone: '',
         accountingSystem: 'dominio',
+        createdByEmail: email.toLowerCase().trim(),
+        createdByName: name,
         chartOfAccounts: {
           assetDefaultAccount: '1.2.3.01.0001',
           depreciationExpenseAccount: '3.1.2.04.0010',
@@ -620,15 +638,152 @@ apiRouter.post('/email/test', async (req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------
+// INBOX IMAP AUTO-INGEST (contsuitesistemas@gmail.com -> Arquivos)
+// ---------------------------------------------------------
+apiRouter.get('/email/inbox-settings', (req: Request, res: Response) => {
+  try {
+    const cfg = getInboxConfig();
+    return res.json({
+      configured: Boolean(cfg.pass && cfg.user),
+      enabled: cfg.enabled,
+      host: cfg.host,
+      port: cfg.port,
+      secure: cfg.secure,
+      user: cfg.user,
+      pollIntervalSeconds: cfg.pollIntervalSeconds,
+      autoTriggerOfx: cfg.autoTriggerOfx,
+      lastCheckedAt: cfg.lastCheckedAt || null,
+      lastStatus: cfg.lastStatus || 'idle',
+      lastMessage: cfg.lastMessage || '',
+      lastImportedCount: cfg.lastImportedCount || 0,
+      totalImportedCount: cfg.totalImportedCount || 0,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/email/inbox-settings', async (req: Request, res: Response) => {
+  try {
+    const existing = getInboxConfig();
+    const {
+      enabled,
+      host,
+      port,
+      secure,
+      user,
+      pass,
+      pollIntervalSeconds,
+      autoTriggerOfx,
+      testNow,
+      syncNow,
+    } = req.body || {};
+
+    const cleanHost = String(host || existing.host || 'imap.gmail.com').trim();
+    const cleanUser = String(user || existing.user || 'contsuitesistemas@gmail.com').trim();
+    const rawPass = typeof pass === 'string' && pass.trim() && pass !== '__KEEP__'
+      ? pass
+      : existing.pass;
+
+    if (!cleanHost || !cleanUser || !rawPass) {
+      return res.status(400).json({
+        error: 'Informe o servidor IMAP, o e-mail (contsuitesistemas@gmail.com) e a Senha de Aplicativo.',
+      });
+    }
+
+    const cleanPass = cleanHost.toLowerCase().includes('gmail')
+      ? rawPass.replace(/\s+/g, '')
+      : rawPass.trim();
+
+    const numericPort = Number(port) || 993;
+    const nextCfg: InboxImapConfig = {
+      ...existing,
+      enabled: enabled !== undefined ? Boolean(enabled) : true,
+      host: cleanHost,
+      port: numericPort,
+      secure: numericPort === 143 ? false : secure !== undefined ? Boolean(secure) : true,
+      user: cleanUser,
+      pass: cleanPass,
+      pollIntervalSeconds: Math.max(30, Number(pollIntervalSeconds) || existing.pollIntervalSeconds || 60),
+      autoTriggerOfx: autoTriggerOfx !== undefined ? Boolean(autoTriggerOfx) : true,
+    };
+
+    if (testNow) {
+      const testRes = await testInboxConnection(nextCfg);
+      if (!testRes.success) {
+        return res.status(400).json({
+          error: testRes.message,
+          testResult: testRes,
+        });
+      }
+      saveInboxConfig({
+        ...nextCfg,
+        lastStatus: 'ok',
+        lastMessage: testRes.message,
+        lastCheckedAt: new Date().toISOString(),
+      });
+
+      let syncRes = null;
+      if (syncNow) {
+        syncRes = await syncEmailInbox({ maxMessages: 15 });
+      }
+
+      return res.json({
+        success: true,
+        message: syncRes?.importedDocuments?.length
+          ? `${testRes.message} ${syncRes.message}`
+          : testRes.message,
+        testResult: testRes,
+        syncResult: syncRes,
+      });
+    }
+
+    saveInboxConfig(nextCfg);
+    return res.json({
+      success: true,
+      message: 'Configurações de recebimento automático (IMAP) salvas com sucesso!',
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/email/sync-inbox', async (req: Request, res: Response) => {
+  try {
+    const { forceAllRecent, maxMessages, silentIfUnconfigured } = req.body || {};
+    const result = await syncEmailInbox({
+      forceAllRecent: Boolean(forceAllRecent),
+      maxMessages: maxMessages ? Number(maxMessages) : 20,
+      silentIfUnconfigured: Boolean(silentIfUnconfigured),
+    });
+    if (!result.success && !silentIfUnconfigured) {
+      return res.status(400).json({
+        error: result.error || result.message,
+        ...result,
+      });
+    }
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Erro ao sincronizar caixa de e-mail.' });
+  }
+});
+
+// ---------------------------------------------------------
 // COMPANIES
 // ---------------------------------------------------------
 apiRouter.get('/companies', (req: Request, res: Response) => {
   try {
-    const { companyId, role } = req.query;
+    const { companyId, role, userId, email } = req.query;
     const all = getCompanies();
-    // Strict isolation: if a client is requesting, they only receive their own company
-    if (role === 'client' && companyId) {
-      const filtered = all.filter(c => c.id === companyId);
+    const normEmail = typeof email === 'string' ? email.toLowerCase().trim() : '';
+    const isMaster = normEmail === 'rodrigobento1979@gmail.com' || normEmail === 'contsuitesistemas@gmail.com';
+    // Strict isolation for client users only: admin/accountant/Master Admin always receive ALL companies
+    if (!isMaster && role === 'client' && companyId) {
+      const filtered = all.filter(c =>
+        c.id === companyId ||
+        (userId && c.createdByUserId === userId) ||
+        (normEmail && c.createdByEmail?.toLowerCase().trim() === normEmail)
+      );
       return res.json(filtered);
     }
     return res.json(all);
@@ -639,7 +794,20 @@ apiRouter.get('/companies', (req: Request, res: Response) => {
 
 apiRouter.post('/companies', (req: Request, res: Response) => {
   try {
-    const { name, cnpj, fantasyName, contactEmail, phone, accountingSystem, chartOfAccounts, adminEmail, adminName } = req.body;
+    const {
+      name,
+      cnpj,
+      fantasyName,
+      contactEmail,
+      phone,
+      accountingSystem,
+      chartOfAccounts,
+      adminEmail,
+      adminName,
+      createdByUserId,
+      createdByEmail,
+      createdByName,
+    } = req.body;
     if (!name || !cnpj) {
       return res.status(400).json({ error: 'Razão Social e CNPJ são obrigatórios.' });
     }
@@ -653,8 +821,27 @@ apiRouter.post('/companies', (req: Request, res: Response) => {
       chartOfAccounts,
       adminEmail: adminEmail || 'rodrigobento1979@gmail.com',
       adminName: adminName || 'Rodrigo Bento',
+      createdByUserId,
+      createdByEmail,
+      createdByName,
     });
     return res.json(newComp);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/companies/sync', (req: Request, res: Response) => {
+  try {
+    const incoming = Array.isArray(req.body?.companies)
+      ? req.body.companies
+      : req.body?.company
+        ? [req.body.company]
+        : [];
+    const synced = incoming
+      .filter((c: any) => c && c.id && c.name)
+      .map((c: any) => upsertCompany(c));
+    return res.json({ success: true, count: synced.length, companies: getCompanies() });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -920,7 +1107,7 @@ function buildConvertedStatementRecord(
 
 apiRouter.post('/ofx/convert', async (req: Request, res: Response) => {
   try {
-    const { fileBase64, mimeType, rawText, bankHint, companyId } = req.body;
+    const { fileBase64, mimeType, rawText, bankHint, companyId, sourceDocId } = req.body;
 
     if (!fileBase64 && !rawText) {
       return res.status(400).json({ error: 'Nenhum arquivo ou texto de extrato fornecido.' });
@@ -941,11 +1128,20 @@ apiRouter.post('/ofx/convert', async (req: Request, res: Response) => {
     if (companyId) {
       savedStatement = saveStatement({
         companyId,
+        sourceDocId: sourceDocId ? String(sourceDocId) : undefined,
         originalFileName: req.body.fileName || 'extrato_convertido.pdf',
         fileBase64: req.body.fileBase64 && req.body.fileBase64.length < 3_500_000 ? req.body.fileBase64 : undefined,
         fileMimeType: req.body.mimeType || 'application/pdf',
         ...convertedRecord,
       });
+
+      if (sourceDocId && savedStatement?.id) {
+        updateDocument(String(sourceDocId), {
+          ofxStatus: 'done',
+          ofxStatementId: savedStatement.id,
+          ofxError: undefined,
+        });
+      }
     }
 
     return res.json({
@@ -992,7 +1188,7 @@ apiRouter.post('/ofx/extract-chunk', async (req: Request, res: Response) => {
 // Finalize and merge multiple extracted page chunks into a single OFX 1.02 statement
 apiRouter.post('/ofx/finalize', async (req: Request, res: Response) => {
   try {
-    const { chunks, totalPages, pagesProcessed, companyId, fileName, fileBase64, mimeType } = req.body;
+    const { chunks, totalPages, pagesProcessed, companyId, fileName, fileBase64, mimeType, sourceDocId } = req.body;
     if (!Array.isArray(chunks) || chunks.length === 0) {
       return res.status(400).json({ error: 'Nenhum lote de transações recebido para consolidação.' });
     }
@@ -1005,11 +1201,20 @@ apiRouter.post('/ofx/finalize', async (req: Request, res: Response) => {
     if (companyId) {
       savedStatement = saveStatement({
         companyId,
+        sourceDocId: sourceDocId ? String(sourceDocId) : undefined,
         originalFileName: fileName || 'extrato_multipagina.pdf',
         fileBase64: fileBase64 && fileBase64.length < 1_800_000 ? fileBase64 : undefined,
         fileMimeType: mimeType || 'application/pdf',
         ...convertedRecord,
       });
+
+      if (sourceDocId && savedStatement?.id) {
+        updateDocument(String(sourceDocId), {
+          ofxStatus: 'done',
+          ofxStatementId: savedStatement.id,
+          ofxError: undefined,
+        });
+      }
 
       // Disparar notificação por e-mail para contsuitesistemas@gmail.com
       const compObj = getCompanyById(companyId);
@@ -1065,7 +1270,7 @@ apiRouter.get('/ofx/history', (req: Request, res: Response) => {
     const { companyId } = req.query;
     const list = getStatements(companyId as string).map(({ fileBase64, ...rest }) => ({
       ...rest,
-      hasOriginalFile: Boolean(fileBase64),
+      hasOriginalFile: Boolean(fileBase64 || rest.sourceDocId),
     }));
     return res.json(list);
   } catch (err: any) {
@@ -1080,6 +1285,17 @@ apiRouter.get('/ofx/statements/:id', (req: Request, res: Response) => {
     const stmt = getStatementById(id);
     if (!stmt) {
       return res.status(404).json({ error: 'Extrato não encontrado.' });
+    }
+    if (!stmt.fileBase64 && stmt.sourceDocId) {
+      const sourceDoc = getDocumentById(stmt.sourceDocId);
+      if (sourceDoc?.fileBase64) {
+        return res.json({
+          ...stmt,
+          fileBase64: sourceDoc.fileBase64,
+          fileMimeType: stmt.fileMimeType || sourceDoc.mimeType,
+          hasOriginalFile: true,
+        });
+      }
     }
     return res.json(stmt);
   } catch (err: any) {
@@ -1319,6 +1535,25 @@ apiRouter.get('/documents/:id', (req: Request, res: Response) => {
   }
 });
 
+apiRouter.post('/documents/analyze-pages', async (req: Request, res: Response) => {
+  try {
+    const { fileName, base64Data, pageCount, startPageNumber } = req.body || {};
+    if (!fileName || !base64Data) {
+      return res.status(400).json({ error: 'Arquivo PDF é obrigatório para análise página a página.' });
+    }
+    const result = await analyzePdfPagesWithAI({
+      fileName: String(fileName),
+      base64Data: String(base64Data),
+      pageCount: Number(pageCount || 1),
+      startPageNumber: Number(startPageNumber || 1),
+    });
+    return res.json(result);
+  } catch (err: any) {
+    console.error('Error analyzing PDF pages:', err);
+    return res.status(500).json({ error: err.message || 'Falha ao analisar páginas do PDF.' });
+  }
+});
+
 apiRouter.post('/documents/classify', async (req: Request, res: Response) => {
   try {
     const { fileName, mimeType, base64Data, textPreview } = req.body || {};
@@ -1335,6 +1570,36 @@ apiRouter.post('/documents/classify', async (req: Request, res: Response) => {
   } catch (err: any) {
     console.error('Error classifying document:', err);
     return res.status(500).json({ error: err.message || 'Falha ao classificar documento.' });
+  }
+});
+
+apiRouter.post('/documents/process', async (req: Request, res: Response) => {
+  try {
+    const {
+      fileName,
+      mimeType,
+      currentCategory,
+      companyId,
+      base64Data,
+      textPreview,
+    } = req.body || {};
+    if (!fileName) {
+      return res.status(400).json({ error: 'Nome do arquivo é obrigatório.' });
+    }
+    const compObj = companyId ? getCompanyById(String(companyId)) : undefined;
+    const result = await processNonExtratoDocumentWithAI({
+      fileName: String(fileName),
+      mimeType: String(mimeType || ''),
+      currentCategory,
+      companyName: compObj?.fantasyName || compObj?.name,
+      accountingSystem: compObj?.accountingSystem,
+      base64Data: typeof base64Data === 'string' ? base64Data : undefined,
+      textPreview: typeof textPreview === 'string' ? textPreview : undefined,
+    });
+    return res.json(result);
+  } catch (err: any) {
+    console.error('Error processing non-extrato document:', err);
+    return res.status(500).json({ error: err.message || 'Falha ao processar documento.' });
   }
 });
 
@@ -1361,6 +1626,10 @@ apiRouter.post('/documents', async (req: Request, res: Response) => {
       confidence,
       notes,
       uploadedBy,
+      ofxStatus,
+      ofxStatementId,
+      ofxError,
+      sourceGroupLabel,
       autoClassify = true,
     } = req.body || {};
 
@@ -1416,6 +1685,10 @@ apiRouter.post('/documents', async (req: Request, res: Response) => {
       confidence: finalConfidence,
       notes: notes ? String(notes).slice(0, 500) : undefined,
       uploadedBy: uploadedBy ? String(uploadedBy).slice(0, 150) : undefined,
+      ofxStatus: ofxStatus || undefined,
+      ofxStatementId: ofxStatementId ? String(ofxStatementId).slice(0, 100) : undefined,
+      ofxError: ofxError ? String(ofxError).slice(0, 250) : undefined,
+      sourceGroupLabel: sourceGroupLabel ? String(sourceGroupLabel).slice(0, 120) : undefined,
       fileBase64: typeof fileBase64 === 'string' ? fileBase64 : undefined,
     });
 
@@ -1471,6 +1744,10 @@ apiRouter.put('/documents/:id', (req: Request, res: Response) => {
       'notes',
       'aiClassified',
       'confidence',
+      'ofxStatus',
+      'ofxStatementId',
+      'ofxError',
+      'sourceGroupLabel',
     ];
     for (const f of fields) {
       if (req.body && req.body[f] !== undefined) {

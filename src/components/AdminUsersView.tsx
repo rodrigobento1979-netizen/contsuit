@@ -23,7 +23,8 @@ import {
   ExternalLink,
   ChevronRight,
   Settings,
-  HelpCircle
+  HelpCircle,
+  Inbox
 } from 'lucide-react';
 import { User, Company } from '../types';
 
@@ -81,6 +82,7 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
 
   // SMTP Direct Email Dispatch State
   const [showSmtpModal, setShowSmtpModal] = useState(false);
+  const [emailModalTab, setEmailModalTab] = useState<'smtp' | 'imap'>('smtp');
   const [smtpHost, setSmtpHost] = useState('smtp.gmail.com');
   const [smtpPort, setSmtpPort] = useState('587');
   const [smtpSecure, setSmtpSecure] = useState(false);
@@ -92,6 +94,18 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
   const [smtpStatusMessage, setSmtpStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [showSmtpHelpModal, setShowSmtpHelpModal] = useState(false);
 
+  // IMAP Automatic Inbox Ingestion State (contsuitesistemas@gmail.com)
+  const [imapEnabled, setImapEnabled] = useState(true);
+  const [imapHost, setImapHost] = useState('imap.gmail.com');
+  const [imapPort, setImapPort] = useState('993');
+  const [imapUser, setImapUser] = useState('contsuitesistemas@gmail.com');
+  const [imapPass, setImapPass] = useState('');
+  const [imapAutoOfx, setImapAutoOfx] = useState(true);
+  const [imapConfigured, setImapConfigured] = useState(false);
+  const [imapLastInfo, setImapLastInfo] = useState<string>('');
+  const [imapSaving, setImapSaving] = useState(false);
+  const [imapStatusMessage, setImapStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
   useEffect(() => {
     fetch('/api/email/settings')
       .then(r => r.json())
@@ -102,6 +116,21 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
           if (d.port) setSmtpPort(String(d.port));
           if (d.user) setSmtpUser(d.user);
           if (d.fromName) setSmtpFromName(d.fromName);
+        }
+      })
+      .catch(() => {});
+
+    fetch('/api/email/inbox-settings')
+      .then(r => r.json())
+      .then(d => {
+        if (d) {
+          setImapConfigured(Boolean(d.configured));
+          if (d.enabled !== undefined) setImapEnabled(Boolean(d.enabled));
+          if (d.host) setImapHost(d.host);
+          if (d.port) setImapPort(String(d.port));
+          if (d.user) setImapUser(d.user);
+          if (d.autoTriggerOfx !== undefined) setImapAutoOfx(Boolean(d.autoTriggerOfx));
+          if (d.lastMessage) setImapLastInfo(d.lastMessage);
         }
       })
       .catch(() => {});
@@ -139,6 +168,50 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
       setSmtpStatusMessage({ type: 'error', text: err.message || 'Erro ao conectar ou salvar servidor SMTP.' });
     } finally {
       setSmtpSaving(false);
+    }
+  };
+
+  const handleSaveImap = async (testNow: boolean = false, syncNow: boolean = false) => {
+    if (!imapHost.trim() || !imapUser.trim() || (!imapPass.trim() && !imapConfigured)) {
+      setImapStatusMessage({
+        type: 'error',
+        text: 'Preencha o Servidor IMAP, o E-mail (contsuitesistemas@gmail.com) e a Senha de App.',
+      });
+      return;
+    }
+    setImapSaving(true);
+    setImapStatusMessage(null);
+    try {
+      const res = await fetch('/api/email/inbox-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enabled: imapEnabled,
+          host: imapHost.trim(),
+          port: Number(imapPort) || 993,
+          secure: Number(imapPort) !== 143,
+          user: imapUser.trim(),
+          pass: imapPass.trim() || '__KEEP__',
+          autoTriggerOfx: imapAutoOfx,
+          testNow,
+          syncNow,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Falha ao conectar caixa de e-mail IMAP.');
+      setImapConfigured(true);
+      if (data.message) setImapLastInfo(data.message);
+      setImapStatusMessage({
+        type: 'success',
+        text: data.message || 'Recebimento automático ativado com sucesso!',
+      });
+    } catch (err: any) {
+      setImapStatusMessage({
+        type: 'error',
+        text: err.message || 'Erro ao salvar ou validar recebimento automático via IMAP.',
+      });
+    } finally {
+      setImapSaving(false);
     }
   };
 
@@ -275,9 +348,12 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
+        <div className="flex flex-wrap items-center gap-2 shrink-0 self-start sm:self-auto">
           <button
-            onClick={() => setShowSmtpModal(true)}
+            onClick={() => {
+              setEmailModalTab('smtp');
+              setShowSmtpModal(true);
+            }}
             className={`px-3 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border ${
               smtpConfigured
                 ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
@@ -286,7 +362,23 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
             title="Configurar servidor SMTP para envio direto de e-mails em segundo plano"
           >
             <Settings className="w-3.5 h-3.5" />
-            <span>{smtpConfigured ? '✓ Envio Direto Ativo' : 'Configurar E-mail Direto (SMTP)'}</span>
+            <span>{smtpConfigured ? '✓ Envio Direto Ativo' : 'Configurar E-mail (SMTP)'}</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setEmailModalTab('imap');
+              setShowSmtpModal(true);
+            }}
+            className={`px-3 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border ${
+              imapConfigured
+                ? 'bg-teal-50 text-teal-800 border-teal-200 hover:bg-teal-100'
+                : 'bg-indigo-50 text-indigo-800 border-indigo-200 hover:bg-indigo-100'
+            }`}
+            title="Receber extratos enviados para contsuitesistemas@gmail.com direto em Arquivos"
+          >
+            <Inbox className="w-3.5 h-3.5" />
+            <span>{imapConfigured ? '✓ Caixa Entrada Ativa' : 'Receber Extratos por E-mail'}</span>
           </button>
 
           <button
@@ -1221,18 +1313,30 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
         </div>
       )}
 
-      {/* MODAL: CONFIGURAÇÃO DE DISPARO DE E-MAIL DIRETO (SMTP) */}
+      {/* MODAL: CONFIGURAÇÃO DE E-MAIL (ENVIO SMTP & RECEBIMENTO AUTOMÁTICO IMAP) */}
       {showSmtpModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-200">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-200 max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2.5">
                 <div className="p-2 rounded-xl bg-teal-50 text-teal-700 border border-teal-200">
-                  <Mail className="w-5 h-5 text-[#00897b]" />
+                  {emailModalTab === 'smtp' ? (
+                    <Mail className="w-5 h-5 text-[#00897b]" />
+                  ) : (
+                    <Inbox className="w-5 h-5 text-[#00897b]" />
+                  )}
                 </div>
                 <div>
-                  <h3 className="font-bold text-slate-900 text-sm">Disparo Direto de E-mails (SMTP)</h3>
-                  <p className="text-xs text-slate-500">Envio automático pela nuvem com template ContSuite</p>
+                  <h3 className="font-bold text-slate-900 text-sm">
+                    {emailModalTab === 'smtp'
+                      ? 'Disparo Direto de E-mails (SMTP)'
+                      : 'Recebimento Automático de Extratos (IMAP)'}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    {emailModalTab === 'smtp'
+                      ? 'Envio automático pela nuvem com template ContSuite'
+                      : 'Anexos enviados para contsuitesistemas@gmail.com vão direto para Arquivos'}
+                  </p>
                 </div>
               </div>
               <div className="flex items-center gap-1.5">
@@ -1249,6 +1353,7 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                   onClick={() => {
                     setShowSmtpModal(false);
                     setSmtpStatusMessage(null);
+                    setImapStatusMessage(null);
                     setShowSmtpHelpModal(false);
                   }}
                   className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
@@ -1258,172 +1363,343 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
               </div>
             </div>
 
-            {/* Presets */}
-            <div>
-              <span className="text-[11px] font-semibold text-slate-500 block mb-1.5">Provedores Rápidos:</span>
-              <div className="flex flex-wrap gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSmtpHost('smtp.gmail.com');
-                    setSmtpPort('587');
-                    setSmtpSecure(false);
-                  }}
-                  className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium transition cursor-pointer"
-                >
-                  Gmail (smtp.gmail.com)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSmtpHost('smtp.office365.com');
-                    setSmtpPort('587');
-                    setSmtpSecure(false);
-                  }}
-                  className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium transition cursor-pointer"
-                >
-                  Outlook / 365
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSmtpHost('smtp.resend.com');
-                    setSmtpPort('587');
-                    setSmtpSecure(false);
-                  }}
-                  className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium transition cursor-pointer"
-                >
-                  Resend
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSmtpHost('smtp.sendgrid.net');
-                    setSmtpPort('587');
-                    setSmtpSecure(false);
-                  }}
-                  className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium transition cursor-pointer"
-                >
-                  SendGrid
-                </button>
-              </div>
-            </div>
-
-            {/* Form */}
-            <div className="space-y-3 text-xs">
-              <div className="grid grid-cols-3 gap-2">
-                <div className="col-span-2">
-                  <label className="text-slate-700 font-semibold block mb-1">Servidor SMTP (Host):</label>
-                  <input
-                    type="text"
-                    value={smtpHost}
-                    onChange={(e) => setSmtpHost(e.target.value)}
-                    placeholder="smtp.gmail.com"
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-[#00897b]"
-                  />
-                </div>
-                <div>
-                  <label className="text-slate-700 font-semibold block mb-1">Porta:</label>
-                  <input
-                    type="text"
-                    value={smtpPort}
-                    onChange={(e) => setSmtpPort(e.target.value)}
-                    placeholder="587"
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-[#00897b]"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-slate-700 font-semibold block mb-1">Usuário / E-mail Remetente:</label>
-                <input
-                  type="email"
-                  value={smtpUser}
-                  onChange={(e) => setSmtpUser(e.target.value)}
-                  placeholder="rodrigobento1979@gmail.com"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-[#00897b]"
-                />
-              </div>
-
-              <div>
-                <label className="text-slate-700 font-semibold block mb-1">
-                  Senha de Aplicativo (App Password):
-                </label>
-                <input
-                  type="password"
-                  value={smtpPass}
-                  onChange={(e) => setSmtpPass(e.target.value)}
-                  placeholder="ex: abcd efgh ijkl mnop"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-[#00897b] font-mono"
-                />
-                <p className="text-[10px] text-slate-500 mt-1">
-                  * No Gmail: acesse <strong>Conta Google &gt; Segurança &gt; Senhas de App</strong> e crie uma senha de 16 caracteres.
-                </p>
-              </div>
-
-              <div>
-                <label className="text-slate-700 font-semibold block mb-1">Nome Exibido no E-mail:</label>
-                <input
-                  type="text"
-                  value={smtpFromName}
-                  onChange={(e) => setSmtpFromName(e.target.value)}
-                  placeholder="ContSuite Contábil - Rodrigo Bento"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-[#00897b]"
-                />
-              </div>
-
-              {/* Status feedback */}
-              {smtpStatusMessage && (
-                <div
-                  className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
-                    smtpStatusMessage.type === 'success'
-                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                      : 'bg-red-50 border-red-200 text-red-700'
-                  }`}
-                >
-                  {smtpStatusMessage.type === 'success' ? (
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  ) : (
-                    <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
-                  )}
-                  <span>{smtpStatusMessage.text}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Modal Actions */}
-            <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-2 border-t border-slate-100">
+            {/* Sub-tabs: Envio SMTP vs Recebimento IMAP */}
+            <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200">
               <button
                 type="button"
-                onClick={() => {
-                  setShowSmtpModal(false);
-                  setSmtpStatusMessage(null);
-                }}
-                className="px-3.5 py-1.5 rounded-xl border border-slate-200 text-slate-600 hover:text-slate-800 text-xs font-semibold cursor-pointer w-full sm:w-auto"
+                onClick={() => setEmailModalTab('smtp')}
+                className={`py-1.5 px-2.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                  emailModalTab === 'smtp'
+                    ? 'bg-white text-teal-800 shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
               >
-                Fechar
+                <Send className="w-3.5 h-3.5" />
+                <span>Envio (SMTP)</span>
               </button>
-
-              <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-                <button
-                  type="button"
-                  disabled={smtpSaving}
-                  onClick={() => handleSaveSmtp(false)}
-                  className="px-3.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer disabled:opacity-50"
-                >
-                  Salvar
-                </button>
-                <button
-                  type="button"
-                  disabled={smtpSaving}
-                  onClick={() => handleSaveSmtp(true)}
-                  className="px-4 py-1.5 rounded-xl bg-[#00897b] hover:bg-[#00796b] text-white text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs disabled:opacity-50"
-                >
-                  <Send className="w-3.5 h-3.5" />
-                  <span>{smtpSaving ? 'Testando Conexão...' : 'Testar & Salvar'}</span>
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => setEmailModalTab('imap')}
+                className={`py-1.5 px-2.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                  emailModalTab === 'imap'
+                    ? 'bg-white text-teal-800 shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Inbox className="w-3.5 h-3.5" />
+                <span>Receber Extratos (IMAP)</span>
+              </button>
             </div>
+
+            {emailModalTab === 'smtp' ? (
+              <>
+                {/* Presets */}
+                <div>
+                  <span className="text-[11px] font-semibold text-slate-500 block mb-1.5">Provedores Rápidos:</span>
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSmtpHost('smtp.gmail.com');
+                        setSmtpPort('587');
+                        setSmtpSecure(false);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium transition cursor-pointer"
+                    >
+                      Gmail (smtp.gmail.com)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSmtpHost('smtp.office365.com');
+                        setSmtpPort('587');
+                        setSmtpSecure(false);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium transition cursor-pointer"
+                    >
+                      Outlook / 365
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSmtpHost('smtp.resend.com');
+                        setSmtpPort('587');
+                        setSmtpSecure(false);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium transition cursor-pointer"
+                    >
+                      Resend
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSmtpHost('smtp.sendgrid.net');
+                        setSmtpPort('587');
+                        setSmtpSecure(false);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium transition cursor-pointer"
+                    >
+                      SendGrid
+                    </button>
+                  </div>
+                </div>
+
+                {/* Form SMTP */}
+                <div className="space-y-3 text-xs">
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="col-span-2">
+                      <label className="text-slate-700 font-semibold block mb-1">Servidor SMTP (Host):</label>
+                      <input
+                        type="text"
+                        value={smtpHost}
+                        onChange={(e) => setSmtpHost(e.target.value)}
+                        placeholder="smtp.gmail.com"
+                        className="w-full px-3 py-2 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-[#00897b]"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-slate-700 font-semibold block mb-1">Porta:</label>
+                      <input
+                        type="text"
+                        value={smtpPort}
+                        onChange={(e) => setSmtpPort(e.target.value)}
+                        placeholder="587"
+                        className="w-full px-3 py-2 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-[#00897b]"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-slate-700 font-semibold block mb-1">Usuário / E-mail Remetente:</label>
+                    <input
+                      type="email"
+                      value={smtpUser}
+                      onChange={(e) => setSmtpUser(e.target.value)}
+                      placeholder="rodrigobento1979@gmail.com"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-[#00897b]"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-slate-700 font-semibold block mb-1">
+                      Senha de Aplicativo (App Password):
+                    </label>
+                    <input
+                      type="password"
+                      value={smtpPass}
+                      onChange={(e) => setSmtpPass(e.target.value)}
+                      placeholder="ex: abcd efgh ijkl mnop"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-[#00897b] font-mono"
+                    />
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      * No Gmail: acesse <strong>Conta Google &gt; Segurança &gt; Senhas de App</strong> e crie uma senha de 16 caracteres.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="text-slate-700 font-semibold block mb-1">Nome Exibido no E-mail:</label>
+                    <input
+                      type="text"
+                      value={smtpFromName}
+                      onChange={(e) => setSmtpFromName(e.target.value)}
+                      placeholder="ContSuite Contábil - Rodrigo Bento"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-[#00897b]"
+                    />
+                  </div>
+
+                  {/* Status feedback */}
+                  {smtpStatusMessage && (
+                    <div
+                      className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
+                        smtpStatusMessage.type === 'success'
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                          : 'bg-red-50 border-red-200 text-red-700'
+                      }`}
+                    >
+                      {smtpStatusMessage.type === 'success' ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      ) : (
+                        <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                      )}
+                      <span>{smtpStatusMessage.text}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Modal Actions */}
+                <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-2 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSmtpModal(false);
+                      setSmtpStatusMessage(null);
+                    }}
+                    className="px-3.5 py-1.5 rounded-xl border border-slate-200 text-slate-600 hover:text-slate-800 text-xs font-semibold cursor-pointer w-full sm:w-auto"
+                  >
+                    Fechar
+                  </button>
+
+                  <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                    <button
+                      type="button"
+                      disabled={smtpSaving}
+                      onClick={() => handleSaveSmtp(false)}
+                      className="px-3.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer disabled:opacity-50"
+                    >
+                      Salvar
+                    </button>
+                    <button
+                      type="button"
+                      disabled={smtpSaving}
+                      onClick={() => handleSaveSmtp(true)}
+                      className="px-4 py-1.5 rounded-xl bg-[#00897b] hover:bg-[#00796b] text-white text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs disabled:opacity-50"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      <span>{smtpSaving ? 'Testando Conexão...' : 'Testar & Salvar'}</span>
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="p-3 rounded-xl bg-teal-50 border border-teal-200 text-xs text-teal-900 space-y-1">
+                  <p className="font-bold">Ingestão Automática para Arquivos & Conversor OFX</p>
+                  <p className="text-[11px] text-teal-800 leading-relaxed">
+                    Sempre que um cliente enviar um extrato bancário (PDF/OFX/imagem), nota fiscal ou recibo para{' '}
+                    <strong>{imapUser || 'contsuitesistemas@gmail.com'}</strong>, o sistema lê o anexo, separa documentos misturados, vincula à empresa pelo e-mail/CNPJ e gera o OFX automaticamente.
+                  </p>
+                </div>
+
+                <div className="space-y-3 text-xs">
+                  <div className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200">
+                    <label className="flex items-center gap-2 font-semibold text-slate-800 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={imapEnabled}
+                        onChange={(e) => setImapEnabled(e.target.checked)}
+                        className="rounded border-slate-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+                      />
+                      <span>Monitoramento automático ativo (a cada 60s)</span>
+                    </label>
+                    <label className="flex items-center gap-1.5 text-[11px] font-semibold text-teal-800 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={imapAutoOfx}
+                        onChange={(e) => setImapAutoOfx(e.target.checked)}
+                        className="rounded border-slate-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+                      />
+                      <span>Gerar OFX na entrada</span>
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="col-span-2">
+                      <label className="text-slate-700 font-semibold block mb-1">Servidor IMAP (Host):</label>
+                      <input
+                        type="text"
+                        value={imapHost}
+                        onChange={(e) => setImapHost(e.target.value)}
+                        placeholder="imap.gmail.com"
+                        className="w-full px-3 py-2 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-[#00897b]"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-slate-700 font-semibold block mb-1">Porta:</label>
+                      <input
+                        type="text"
+                        value={imapPort}
+                        onChange={(e) => setImapPort(e.target.value)}
+                        placeholder="993"
+                        className="w-full px-3 py-2 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-[#00897b]"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-slate-700 font-semibold block mb-1">Caixa de Entrada Monitorada:</label>
+                    <input
+                      type="email"
+                      value={imapUser}
+                      onChange={(e) => setImapUser(e.target.value)}
+                      placeholder="contsuitesistemas@gmail.com"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-[#00897b]"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-slate-700 font-semibold block mb-1">
+                      Senha de Aplicativo Gmail ({imapUser || 'contsuitesistemas@gmail.com'}):
+                    </label>
+                    <input
+                      type="password"
+                      value={imapPass}
+                      onChange={(e) => setImapPass(e.target.value)}
+                      placeholder={imapConfigured ? '•••••••••••••••• (salva — digite apenas para trocar)' : 'ex: abcd efgh ijkl mnop'}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl outline-none focus:ring-2 focus:ring-[#00897b] font-mono"
+                    />
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      * Crie a Senha de App logado exatamente na conta <strong>contsuitesistemas@gmail.com</strong> em Conta Google &gt; Segurança &gt; Senhas de App.
+                    </p>
+                  </div>
+
+                  {imapLastInfo && !imapStatusMessage && (
+                    <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600">
+                      <strong>Último status:</strong> {imapLastInfo}
+                    </div>
+                  )}
+
+                  {imapStatusMessage && (
+                    <div
+                      className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
+                        imapStatusMessage.type === 'success'
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                          : 'bg-red-50 border-red-200 text-red-700'
+                      }`}
+                    >
+                      {imapStatusMessage.type === 'success' ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      ) : (
+                        <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                      )}
+                      <span>{imapStatusMessage.text}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-2 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSmtpModal(false);
+                      setImapStatusMessage(null);
+                    }}
+                    className="px-3.5 py-1.5 rounded-xl border border-slate-200 text-slate-600 hover:text-slate-800 text-xs font-semibold cursor-pointer w-full sm:w-auto"
+                  >
+                    Fechar
+                  </button>
+
+                  <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                    <button
+                      type="button"
+                      disabled={imapSaving}
+                      onClick={() => handleSaveImap(true, false)}
+                      className="px-3.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold cursor-pointer disabled:opacity-50"
+                    >
+                      Testar Conexão
+                    </button>
+                    <button
+                      type="button"
+                      disabled={imapSaving}
+                      onClick={() => handleSaveImap(true, true)}
+                      className="px-4 py-1.5 rounded-xl bg-[#00897b] hover:bg-[#00796b] text-white text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs disabled:opacity-50"
+                    >
+                      <Inbox className="w-3.5 h-3.5" />
+                      <span>{imapSaving ? 'Conectando...' : 'Salvar & Sincronizar Agora'}</span>
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
