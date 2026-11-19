@@ -22,11 +22,10 @@ export function filterCompaniesForUser(
 
   const normEmail = (user.email || '').toLowerCase().trim();
   return companies.filter((c) => {
-    if (!c || c.id === 'comp-master') return false;
+    if (!c) return false;
     if (user.companyId && c.id === user.companyId) return true;
     if (user.id && c.createdByUserId === user.id) return true;
     if (normEmail && c.createdByEmail?.toLowerCase().trim() === normEmail) return true;
-    if (normEmail && c.contactEmail?.toLowerCase().trim() === normEmail) return true;
     return false;
   });
 }

@@ -43,64 +43,11 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
   onEditCompany,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedUserFilter, setSelectedUserFilter] = useState<string>('all');
   const [showReportModal, setShowReportModal] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   const isMaster = isMasterUser(currentUser);
   const visibleCompanies = filterCompaniesForUser(allCompanies, currentUser);
-
-  const doesUserOwnCompany = (u: User, c: Company) => {
-    const uEmail = (u.email || '').toLowerCase().trim();
-    const cEmail = (c.createdByEmail || '').toLowerCase().trim();
-    return (
-      u.companyId === c.id ||
-      (c.createdByUserId && u.id === c.createdByUserId) ||
-      (uEmail && cEmail && uEmail === cEmail)
-    );
-  };
-
-  // Build user filter summary for Master Admin so Master can jump directly to any user's companies
-  const userFilterBuckets = React.useMemo(() => {
-    if (!isMaster) return [];
-    const buckets: { key: string; label: string; email: string; count: number }[] = [];
-    const seenKeys = new Set<string>();
-
-    allUsers.forEach((u) => {
-      const email = (u.email || '').toLowerCase().trim();
-      const key = email || u.id;
-      if (!key || seenKeys.has(key)) return;
-      const owned = visibleCompanies.filter((c) => doesUserOwnCompany(u, c));
-      if (owned.length > 0) {
-        seenKeys.add(key);
-        buckets.push({
-          key,
-          label: u.name || email.split('@')[0],
-          email: u.email,
-          count: owned.length,
-        });
-      }
-    });
-
-    // Also capture companies created by emails not present in allUsers
-    visibleCompanies.forEach((c) => {
-      const cEmail = (c.createdByEmail || '').toLowerCase().trim();
-      if (cEmail && !seenKeys.has(cEmail)) {
-        const owned = visibleCompanies.filter(
-          (x) => (x.createdByEmail || '').toLowerCase().trim() === cEmail
-        );
-        seenKeys.add(cEmail);
-        buckets.push({
-          key: cEmail,
-          label: c.createdByName || cEmail.split('@')[0],
-          email: c.createdByEmail || cEmail,
-          count: owned.length,
-        });
-      }
-    });
-
-    return buckets;
-  }, [isMaster, allUsers, visibleCompanies]);
 
   const handleRefresh = async () => {
     if (!onRefreshCompanies) return;
@@ -121,26 +68,13 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
     { key: 'createdByEmail', label: 'Cadastrada Por', align: 'left', format: (val) => val ? String(val) : 'Administrador' },
   ];
 
-  const filteredCompanies = visibleCompanies.filter(c => {
-    if (isMaster && selectedUserFilter !== 'all') {
-      const matchedUser = allUsers.find(
-        (u) => ((u.email || '').toLowerCase().trim() || u.id) === selectedUserFilter
-      );
-      const matchesUser = matchedUser
-        ? doesUserOwnCompany(matchedUser, c)
-        : (c.createdByEmail || '').toLowerCase().trim() === selectedUserFilter;
-      if (!matchesUser) return false;
-    }
-
-    const q = searchTerm.toLowerCase();
-    return (
-      (c.name || '').toLowerCase().includes(q) ||
-      (c.fantasyName || '').toLowerCase().includes(q) ||
-      (c.cnpj || '').includes(searchTerm) ||
-      (c.createdByEmail || '').toLowerCase().includes(q) ||
-      (c.createdByName || '').toLowerCase().includes(q)
-    );
-  });
+  const filteredCompanies = visibleCompanies.filter(c => 
+    (c.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (c.fantasyName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (c.cnpj || '').includes(searchTerm) ||
+    (c.createdByEmail || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (c.createdByName || '').toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   return (
     <div className="w-full max-w-full overflow-x-hidden space-y-4">
@@ -155,9 +89,7 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
               Cadastro de Empresas & Carteira de Clientes
             </h1>
             <p className="text-xs text-slate-500">
-              {isMaster
-                ? `Total global de ${visibleCompanies.length} ${visibleCompanies.length === 1 ? 'empresa cadastrada' : 'empresas cadastradas'} entre todos os usuários`
-                : `Total de ${visibleCompanies.length} ${visibleCompanies.length === 1 ? 'empresa vinculada' : 'empresas vinculadas'} ao usuário ${currentUser.email}`}
+              Total de <strong>{visibleCompanies.length}</strong> {visibleCompanies.length === 1 ? 'empresa vinculada' : 'empresas vinculadas'} ao usuário <strong>{currentUser.email}</strong>
             </p>
           </div>
         </div>
@@ -194,57 +126,18 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
         </div>
       </div>
 
-      {/* Master Admin Broad Access Indicator + Filter by User */}
+      {/* Master Admin Broad Access Indicator */}
       {isMaster && (
-        <div className="p-3.5 rounded-2xl bg-indigo-50/70 border border-indigo-200/80 space-y-2.5 text-xs text-indigo-950">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="w-4 h-4 text-indigo-600 shrink-0" />
-              <span>
-                <strong>Navegação Master por Todos os Usuários:</strong> Você acessa e navega livremente por <strong>todas</strong> as empresas de qualquer usuário (Arquivos, OFX, Ativo Imobilizado, Plano de Contas e Honorários).
-              </span>
-            </div>
-            <span className="text-[10px] font-bold bg-indigo-600 text-white px-2.5 py-1 rounded-full shrink-0 self-start sm:self-auto">
-              {visibleCompanies.length} {visibleCompanies.length === 1 ? 'Empresa Global' : 'Empresas Globais'}
+        <div className="p-3 rounded-2xl bg-indigo-50/70 border border-indigo-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-indigo-950">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-indigo-600 shrink-0" />
+            <span>
+              <strong>Acesso Amplo Administrador Master Ativo:</strong> Você visualiza e gerencia <strong>todas</strong> as empresas do escritório e também todas as empresas cadastradas por clientes e usuários (Arquivos, OFX, Ativo Imobilizado, Plano de Contas e Honorários).
             </span>
           </div>
-
-          {userFilterBuckets.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-indigo-200/60">
-              <span className="text-[11px] font-bold text-indigo-800 mr-1">Filtrar por Usuário:</span>
-              <button
-                type="button"
-                onClick={() => setSelectedUserFilter('all')}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer ${
-                  selectedUserFilter === 'all'
-                    ? 'bg-indigo-600 text-white shadow-2xs'
-                    : 'bg-white text-indigo-900 border border-indigo-200 hover:bg-indigo-100'
-                }`}
-              >
-                Todos ({visibleCompanies.length})
-              </button>
-              {userFilterBuckets.map((b) => (
-                <button
-                  key={b.key}
-                  type="button"
-                  onClick={() => setSelectedUserFilter(b.key)}
-                  title={b.email}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer flex items-center gap-1 ${
-                    selectedUserFilter === b.key
-                      ? 'bg-indigo-600 text-white shadow-2xs'
-                      : 'bg-white text-slate-700 border border-indigo-200 hover:bg-indigo-100'
-                  }`}
-                >
-                  <span>{b.label}</span>
-                  <span className={`px-1.5 py-0.2 rounded-full text-[9px] ${
-                    selectedUserFilter === b.key ? 'bg-white/25 text-white' : 'bg-indigo-100 text-indigo-800'
-                  }`}>
-                    {b.count}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
+          <span className="text-[10px] font-bold bg-indigo-600 text-white px-2.5 py-1 rounded-full shrink-0 self-start sm:self-auto">
+            {visibleCompanies.length} {visibleCompanies.length === 1 ? 'Empresa Global' : 'Empresas Globais'}
+          </span>
         </div>
       )}
 
@@ -292,7 +185,7 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
               <th className="py-2.5 px-3 sm:px-4">Empresa / Razão Social</th>
               <th className="py-2.5 px-3 hidden sm:table-cell">CNPJ</th>
               <th className="py-2.5 px-3 hidden md:table-cell">Sistema Contábil</th>
-              <th className="py-2.5 px-3 hidden lg:table-cell">Usuário Vinculado & Origem</th>
+              <th className="py-2.5 px-3 hidden lg:table-cell">Contato & Origem</th>
               <th className="py-2.5 px-2 text-center">Status</th>
               <th className="py-2.5 px-3 sm:px-4 text-right">Ações</th>
             </tr>
@@ -307,7 +200,7 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
             ) : (
               filteredCompanies.map((comp) => {
                 const isActive = comp.id === currentCompany.id;
-                const linkedUsers = allUsers.filter((u) => doesUserOwnCompany(u, comp));
+                const linkedUsers = allUsers.filter(u => u.companyId === comp.id);
                 const creatorLabel = comp.createdByName || comp.createdByEmail;
                 return (
                   <tr key={comp.id} className={`hover:bg-slate-50/70 transition ${isActive ? 'bg-teal-50/30' : ''}`}>
@@ -331,11 +224,6 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
                       <div className="text-[10px] text-teal-700 font-mono sm:hidden">
                         CNPJ: {comp.cnpj}
                       </div>
-                      {isMaster && (linkedUsers.length > 0 || creatorLabel) && (
-                        <div className="text-[10px] text-indigo-700 font-semibold lg:hidden truncate max-w-[210px] mt-0.5">
-                          Usuário: {linkedUsers.map((u) => u.name).join(', ') || creatorLabel}
-                        </div>
-                      )}
                     </td>
 
                     <td className="py-3 px-3 hidden sm:table-cell font-mono text-slate-700 whitespace-nowrap">
@@ -348,25 +236,23 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
                       </span>
                     </td>
 
-                    <td className="py-3 px-3 hidden lg:table-cell text-slate-600 max-w-[250px]">
-                      {linkedUsers.length > 0 && (
-                        <div className="text-[11px] text-indigo-800 font-bold flex items-center gap-1 truncate">
-                          <Users className="w-3 h-3 text-indigo-600 shrink-0" />
-                          <span className="truncate" title={linkedUsers.map((u) => `${u.name} (${u.email})`).join(', ')}>
-                            {linkedUsers.map((u) => `${u.name} (${u.email})`).join(', ')}
-                          </span>
-                        </div>
-                      )}
+                    <td className="py-3 px-3 hidden lg:table-cell text-slate-600 max-w-[230px]">
+                      <div className="flex items-center gap-1 truncate text-[11px]">
+                        <Mail className="w-3 h-3 text-slate-400 shrink-0" />
+                        <span className="truncate">{comp.contactEmail || '—'}</span>
+                      </div>
                       {creatorLabel && (
-                        <div className="text-[10px] text-slate-600 font-medium flex items-center gap-1 truncate mt-0.5">
-                          <UserCheck className="w-3 h-3 text-teal-600 shrink-0" />
+                        <div className="text-[10px] text-indigo-700 font-medium flex items-center gap-1 truncate mt-0.5">
+                          <UserCheck className="w-3 h-3 shrink-0" />
                           <span className="truncate">Por: {creatorLabel}</span>
                         </div>
                       )}
-                      <div className="flex items-center gap-1 truncate text-[10px] text-slate-400 mt-0.5">
-                        <Mail className="w-3 h-3 shrink-0" />
-                        <span className="truncate">{comp.contactEmail || '—'}</span>
-                      </div>
+                      {linkedUsers.length > 0 && (
+                        <div className="text-[10px] text-slate-500 flex items-center gap-1 mt-0.5">
+                          <Users className="w-3 h-3 text-teal-600 shrink-0" />
+                          <span>{linkedUsers.length} {linkedUsers.length === 1 ? 'usuário vinculado' : 'usuários vinculados'}</span>
+                        </div>
+                      )}
                     </td>
 
                     <td className="py-3 px-2 text-center whitespace-nowrap">

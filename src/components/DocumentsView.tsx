@@ -46,14 +46,10 @@ import {
 } from '../types';
 import {
   fetchDocumentsFromFirestore,
-  fetchAllCompaniesDocumentsFromFirestore,
   saveDocumentToFirestore,
-  moveDocumentInFirestore,
   deleteDocumentFromFirestore,
   fetchStatementsFromFirestore,
   subscribeDocumentsFromFirestore,
-  fetchDocumentBinaryFromFirestore,
-  subscribeToAuth,
 } from '../firebase/service';
 import {
   base64ToBlob,
@@ -72,9 +68,6 @@ interface DocumentsViewProps {
   currentUser: User;
   currentCompany: Company;
   allCompanies: Company[];
-  allUsers?: (User & { company?: Company })[];
-  pendingPreviewDoc?: CompanyDocument | null;
-  onConsumePendingPreviewDoc?: () => void;
   onSelectCompany: (companyId: string) => void;
   onOpenInOfxConverter?: (file: File) => void;
   showToast: (text: string, type?: 'success' | 'error') => void;
@@ -207,50 +200,6 @@ function getFileIcon(mimeType: string, fileName: string) {
   return FileIcon;
 }
 
-function normalizeDigits(str?: string): string {
-  return (str || '').replace(/\D/g, '');
-}
-
-function findMatchingClientCompanyForDoc(
-  doc: {
-    detectedCnpj?: string;
-    fileName?: string;
-    summary?: string;
-    issuerOrBank?: string;
-    uploadedBy?: string;
-    notes?: string;
-  },
-  clientCompanies: Company[]
-): Company | null {
-  const candidates = clientCompanies.filter((c) => c && c.id && c.id !== 'comp-master');
-  if (candidates.length === 0) return null;
-
-  const cnpjInDoc = normalizeDigits(doc.detectedCnpj);
-  const textBlob = `${doc.fileName || ''} ${doc.summary || ''} ${doc.issuerOrBank || ''} ${doc.notes || ''} ${doc.uploadedBy || ''}`;
-  const digitsInBlob = normalizeDigits(textBlob);
-
-  for (const comp of candidates) {
-    const compCnpj = normalizeDigits(comp.cnpj);
-    if (compCnpj.length === 14 && (cnpjInDoc === compCnpj || digitsInBlob.includes(compCnpj))) {
-      return comp;
-    }
-  }
-
-  const lowerBlob = textBlob.toLowerCase();
-  for (const comp of candidates) {
-    const fantasy = (comp.fantasyName || '').toLowerCase().trim();
-    const name = (comp.name || '').toLowerCase().trim();
-    const creatorEmail = (comp.createdByEmail || '').toLowerCase().trim();
-    const contactEmail = (comp.contactEmail || '').toLowerCase().trim();
-    if (fantasy.length >= 3 && lowerBlob.includes(fantasy)) return comp;
-    if (name.length >= 5 && lowerBlob.includes(name)) return comp;
-    if (creatorEmail && lowerBlob.includes(creatorEmail)) return comp;
-    if (contactEmail && lowerBlob.includes(contactEmail)) return comp;
-  }
-
-  return null;
-}
-
 async function prepareClassificationPayload(file: File, fullBase64: string): Promise<{
   classificationBase64?: string;
   textPreview?: string;
@@ -340,24 +289,13 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   currentUser,
   currentCompany,
   allCompanies,
-  allUsers = [],
-  pendingPreviewDoc,
-  onConsumePendingPreviewDoc,
   onSelectCompany,
   onOpenInOfxConverter,
   showToast,
 }) => {
   const isMaster = isMasterUser(currentUser);
-  const visibleCompanies = useMemo(
-    () => filterCompaniesForUser(allCompanies, currentUser),
-    [allCompanies, currentUser]
-  );
-  const visibleCompanyIds = useMemo(
-    () => new Set(visibleCompanies.map((c) => c.id)),
-    [visibleCompanies]
-  );
+  const visibleCompanies = filterCompaniesForUser(allCompanies, currentUser);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const clickingExplorerFolderRef = useRef<boolean>(false);
 
   const {
     autoRunEnabled,
@@ -387,19 +325,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
   const [documents, setDocuments] = useState<CompanyDocument[]>([]);
   const [loading, setLoading] = useState(true);
-  const [firebaseUid, setFirebaseUid] = useState<string>('');
   const [viewMode, setViewMode] = useState<ViewMode>('kanban_category');
-  const [masterViewAll, setMasterViewAll] = useState<boolean>(false);
   const [explorerCompanyId, setExplorerCompanyId] = useState<string | null>(null);
   const [explorerCategory, setExplorerCategory] = useState<DocumentCategory | null>(null);
-  const [reorganizingMisfiled, setReorganizingMisfiled] = useState<boolean>(false);
-
-  useEffect(() => {
-    const unsub = subscribeToAuth((fbUser) => {
-      setFirebaseUid(fbUser?.uid || '');
-    });
-    return () => unsub();
-  }, []);
 
   // Filters
   const [searchTerm, setSearchTerm] = useState('');
@@ -432,7 +360,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
   // Editable detail fields
   const [editDraft, setEditDraft] = useState<{
-    targetCompanyId: string;
     category: DocumentCategory;
     status: DocumentStatus;
     competenceMonth: string;
@@ -444,53 +371,32 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     notes: string;
   } | null>(null);
 
-  const isGlobalMasterScope = isMaster && (masterViewAll || (viewMode === 'explorer' && !explorerCompanyId));
-  const cacheKey = isGlobalMasterScope
-    ? 'contsuite_cached_docs_master_all'
-    : `contsuite_cached_docs_${currentCompany.id || 'none'}`;
-
-  const isDocInScope = useCallback(
-    (doc?: CompanyDocument | null) => {
-      if (!doc || !doc.id || !doc.companyId) return false;
-      if (!isMaster && doc.companyId === 'comp-master') return false;
-      if (isGlobalMasterScope) {
-        return visibleCompanyIds.size === 0 || visibleCompanyIds.has(doc.companyId);
-      }
-      if (!isMaster && visibleCompanyIds.size > 0 && !visibleCompanyIds.has(doc.companyId)) {
-        return false;
-      }
-      return Boolean(currentCompany.id && doc.companyId === currentCompany.id);
-    },
-    [isMaster, isGlobalMasterScope, visibleCompanyIds, currentCompany.id]
-  );
+  const cacheKey = `contsuite_cached_docs_${currentCompany.id}`;
 
   const mergeDocsIntoState = useCallback(
     (incomingDocs: CompanyDocument[]) => {
-      if ((!currentCompany.id && !isGlobalMasterScope) || incomingDocs.length === 0) return;
+      if (!currentCompany.id || incomingDocs.length === 0) return;
       setDocuments((prev) => {
         const map = new Map<string, CompanyDocument>();
         prev.forEach((d) => {
-          if (isDocInScope(d)) {
+          if (d && d.id && d.companyId === currentCompany.id) {
             map.set(d.id, d);
           }
         });
         let changed = false;
         incomingDocs.forEach((d) => {
-          if (isDocInScope(d)) {
+          if (d && d.id && d.companyId === currentCompany.id) {
             const existing = map.get(d.id);
             const nextDoc: CompanyDocument = {
               ...existing,
               ...d,
-              fileBase64: d.fileBase64 || existing?.fileBase64,
-              hasOriginalFile: Boolean(d.fileBase64 || existing?.fileBase64 || d.hasOriginalFile || existing?.hasOriginalFile),
+              hasOriginalFile: Boolean(d.hasOriginalFile || existing?.hasOriginalFile),
             };
             if (
               !existing ||
               existing.updatedAt !== nextDoc.updatedAt ||
               existing.status !== nextDoc.status ||
-              existing.category !== nextDoc.category ||
-              existing.companyId !== nextDoc.companyId ||
-              (!existing.fileBase64 && Boolean(nextDoc.fileBase64))
+              existing.category !== nextDoc.category
             ) {
               changed = true;
             }
@@ -507,27 +413,15 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         return merged;
       });
     },
-    [currentCompany.id, isGlobalMasterScope, cacheKey, isDocInScope]
+    [currentCompany.id, cacheKey]
   );
 
   const loadDocuments = useCallback(async (silent: boolean = false) => {
-    if (!isGlobalMasterScope) {
-      if (!currentCompany.id || (!isMaster && currentCompany.id === 'comp-master')) {
-        setDocuments([]);
-        setLoading(false);
-        return;
-      }
-    }
+    if (!currentCompany.id) return;
     if (!silent) setLoading(true);
-
-    const reqCompanyParam = isGlobalMasterScope ? 'all' : currentCompany.id;
-    const reqEmailParam = currentUser.email ? `&email=${encodeURIComponent(currentUser.email)}` : '';
-
     let apiDocs: CompanyDocument[] = [];
     try {
-      const res = await fetch(`/api/documents?companyId=${encodeURIComponent(reqCompanyParam)}${reqEmailParam}`, {
-        cache: 'no-store',
-      });
+      const res = await fetch(`/api/documents?companyId=${currentCompany.id}`, { cache: 'no-store' });
       if (res.ok && (res.headers.get('content-type') || '').includes('application/json')) {
         apiDocs = await res.json();
       }
@@ -538,12 +432,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     let firestoreDocs: CompanyDocument[] = [];
     if (!silent) {
       try {
-        if (isGlobalMasterScope) {
-          const allCompIds = visibleCompanies.map((c) => c.id);
-          firestoreDocs = await fetchAllCompaniesDocumentsFromFirestore(allCompIds);
-        } else {
-          firestoreDocs = await fetchDocumentsFromFirestore(currentCompany.id);
-        }
+        firestoreDocs = await fetchDocumentsFromFirestore(currentCompany.id);
       } catch (err) {
         console.warn('Could not load documents from Firestore:', err);
       }
@@ -566,7 +455,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
     const map = new Map<string, CompanyDocument>();
     [...localDocs, ...firestoreDocs, ...apiDocs].forEach((d) => {
-      if (isDocInScope(d)) {
+      if (d && d.id && d.companyId === currentCompany.id) {
         const existing = map.get(d.id);
         map.set(d.id, {
           ...existing,
@@ -583,64 +472,8 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     try {
       localStorage.setItem(cacheKey, JSON.stringify(merged.map(({ fileBase64, ...rest }) => rest)));
     } catch {}
-
-    // Espelhamento bidirecional Firestore <-> db.json
-    if (firestoreDocs.length > 0) {
-      const apiDocIds = new Set(apiDocs.map((d) => d.id));
-      const missingInApi = merged.filter((d) => !apiDocIds.has(d.id));
-      if (missingInApi.length > 0) {
-        fetch('/api/database/sync-mirror', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            documents: missingInApi.map(({ fileBase64, ...rest }) => rest),
-          }),
-        }).catch(() => {});
-      }
-    }
-
-    if (firebaseUid && merged.length > 0 && !isGlobalMasterScope) {
-      const fDocIds = new Set(firestoreDocs.map((d) => d.id));
-      const missingInFirestore = merged.filter((d) => !fDocIds.has(d.id));
-      missingInFirestore.forEach((d) => {
-        saveDocumentToFirestore(d.companyId || currentCompany.id, d).catch(() => {});
-      });
-    }
-
     setLoading(false);
-  }, [
-    isGlobalMasterScope,
-    isMaster,
-    currentCompany.id,
-    currentUser.email,
-    visibleCompanies,
-    firebaseUid,
-    cacheKey,
-    isDocInScope,
-    mergeDocsIntoState,
-  ]);
-
-  // Reset full state only when the logged-in user changes
-  useEffect(() => {
-    setMasterViewAll(false);
-    setExplorerCompanyId(null);
-    setExplorerCategory(null);
-    setDocuments([]);
-    setSelectedDoc(null);
-    setSearchTerm('');
-  }, [currentUser.id]);
-
-  // Avoid wiping Explorer navigation when Master clicks a client company folder (which also calls onSelectCompany)
-  useEffect(() => {
-    if (clickingExplorerFolderRef.current) {
-      clickingExplorerFolderRef.current = false;
-      return;
-    }
-    if (!masterViewAll) {
-      setExplorerCategory(null);
-      setSelectedDoc(null);
-    }
-  }, [currentCompany.id, masterViewAll]);
+  }, [currentCompany.id, cacheKey, mergeDocsIntoState]);
 
   useEffect(() => {
     void loadDocuments(false);
@@ -648,20 +481,17 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
   // Real-time cross-device sync: Firestore onSnapshot + instant custom event + silent 3s API poll
   useEffect(() => {
-    if (!currentCompany.id && !isGlobalMasterScope) return;
+    if (!currentCompany.id) return;
 
-    const unsubscribe =
-      currentCompany.id && !isGlobalMasterScope
-        ? subscribeDocumentsFromFirestore(currentCompany.id, (liveDocs) => {
-            if (liveDocs.length > 0) {
-              mergeDocsIntoState(liveDocs);
-            }
-          })
-        : () => {};
+    const unsubscribe = subscribeDocumentsFromFirestore(currentCompany.id, (liveDocs) => {
+      if (liveDocs.length > 0) {
+        mergeDocsIntoState(liveDocs);
+      }
+    });
 
     const handleLocalDocSaved = (e: Event) => {
       const customEv = e as CustomEvent<CompanyDocument>;
-      if (customEv.detail && isDocInScope(customEv.detail)) {
+      if (customEv.detail && customEv.detail.companyId === currentCompany.id) {
         mergeDocsIntoState([customEv.detail]);
       }
     };
@@ -689,7 +519,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       document.removeEventListener('visibilitychange', handleFocusOrVisibility);
       window.clearInterval(pollInterval);
     };
-  }, [currentCompany.id, isGlobalMasterScope, firebaseUid, loadDocuments, mergeDocsIntoState, isDocInScope]);
+  }, [currentCompany.id, loadDocuments, mergeDocsIntoState]);
 
   useEffect(() => {
     if (lastInboxSyncEventTs > 0) {
@@ -793,18 +623,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     return { total, aiCount, pendingCount, doneCount };
   }, [filteredDocs]);
 
-  // Detect any documents stuck in Bento Contabilidade (comp-master) that belong to another client company (e.g. SSCONT)
-  const misfiledMasterDocs = useMemo(() => {
-    if (!isMaster) return [] as { doc: CompanyDocument; targetCompany: Company }[];
-    return documents
-      .filter((d) => d.companyId === 'comp-master')
-      .map((d) => {
-        const match = findMatchingClientCompanyForDoc(d, visibleCompanies);
-        return match ? { doc: d, targetCompany: match } : null;
-      })
-      .filter((item): item is { doc: CompanyDocument; targetCompany: Company } => Boolean(item));
-  }, [isMaster, documents, visibleCompanies]);
-
   // Read file as base64
   const readFileBase64 = (file: File): Promise<string> =>
     new Promise((resolve, reject) => {
@@ -822,59 +640,29 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     const files = Array.from(fileList || []);
     if (files.length === 0) return;
 
-    const uploadBaseCompanyId =
-      viewMode === 'explorer' && explorerCompanyId
-        ? explorerCompanyId
-        : currentCompany.id;
-
-    if (!uploadBaseCompanyId) {
-      showToast('Selecione uma empresa válida antes de enviar documentos.', 'error');
-      return;
-    }
-
     setUploadingQueue({ total: files.length, completed: 0, currentFileName: files[0].name });
     let createdCardsCount = 0;
     let splitFilesCount = 0;
     let triggeredOfxCount = 0;
-    let autoRoutedCompanyCount = 0;
 
     const persistCreatedCard = async (
       savedDoc: CompanyDocument,
       binaryBase64: string
     ) => {
-      const targetDocCompanyId = savedDoc.companyId || uploadBaseCompanyId;
       await saveBlobToIdb(savedDoc.id, binaryBase64);
       savedDoc.hasOriginalFile = true;
 
       try {
-        await saveDocumentToFirestore(targetDocCompanyId, {
-          ...savedDoc,
-          companyId: targetDocCompanyId,
-          fileBase64: binaryBase64,
-        });
+        await saveDocumentToFirestore(currentCompany.id, savedDoc);
       } catch (fErr) {
         console.warn('Firestore save document warning:', fErr);
       }
 
-      if (isDocInScope({ ...savedDoc, companyId: targetDocCompanyId })) {
-        setDocuments((prev) => {
-          const next = [savedDoc, ...prev.filter((d) => d.id !== savedDoc.id)];
-          persistCacheList(next);
-          return next;
-        });
-      } else {
-        // Persist in target company cache so switching to that folder shows it right away
-        try {
-          const targetCacheKey = `contsuite_cached_docs_${targetDocCompanyId}`;
-          const raw = localStorage.getItem(targetCacheKey);
-          const existingList: CompanyDocument[] = raw ? JSON.parse(raw) : [];
-          const { fileBase64: _, ...metaOnly } = savedDoc;
-          localStorage.setItem(
-            targetCacheKey,
-            JSON.stringify([metaOnly, ...existingList.filter((d) => d.id !== savedDoc.id)])
-          );
-        } catch {}
-      }
+      setDocuments((prev) => {
+        const next = [savedDoc, ...prev.filter((d) => d.id !== savedDoc.id)];
+        persistCacheList(next);
+        return next;
+      });
       createdCardsCount++;
 
       // Automatic OFX Agent trigger for bank statements on upload
@@ -922,29 +710,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               const willAutoOfx =
                 autoRunEnabled && scheduleMode === 'on_upload' && grp.category === 'extrato';
 
-              let targetGroupCompanyId = uploadBaseCompanyId;
-              if (isMaster && uploadBaseCompanyId === 'comp-master') {
-                const matchedClient = findMatchingClientCompanyForDoc(
-                  {
-                    detectedCnpj: grp.detectedCnpj,
-                    fileName: grp.fileName,
-                    summary: grp.summary,
-                    issuerOrBank: grp.issuerOrBank,
-                    uploadedBy: currentUser.email,
-                  },
-                  visibleCompanies
-                );
-                if (matchedClient) {
-                  targetGroupCompanyId = matchedClient.id;
-                  autoRoutedCompanyCount++;
-                }
-              }
-
               const res = await fetch('/api/documents', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  companyId: targetGroupCompanyId,
+                  companyId: currentCompany.id,
                   fileName: grp.fileName,
                   mimeType: 'application/pdf',
                   fileSize: grp.fileSize,
@@ -973,7 +743,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 const now = new Date().toISOString();
                 savedDoc = {
                   id: 'doc-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 10000),
-                  companyId: targetGroupCompanyId,
+                  companyId: currentCompany.id,
                   fileName: grp.fileName.slice(0, 200),
                   mimeType: 'application/pdf',
                   fileSize: grp.fileSize,
@@ -1012,7 +782,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            companyId: uploadBaseCompanyId,
+            companyId: currentCompany.id,
             fileName: file.name,
             mimeType,
             fileSize: file.size,
@@ -1031,7 +801,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           const now = new Date().toISOString();
           savedDoc = {
             id: 'doc-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 10000),
-            companyId: uploadBaseCompanyId,
+            companyId: currentCompany.id,
             fileName: file.name.slice(0, 200),
             mimeType: mimeType.slice(0, 120),
             fileSize: file.size,
@@ -1045,19 +815,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             updatedAt: now,
             hasOriginalFile: true,
           };
-        }
-
-        if (savedDoc && isMaster && savedDoc.companyId === 'comp-master') {
-          const matchedClient = findMatchingClientCompanyForDoc(savedDoc, visibleCompanies);
-          if (matchedClient) {
-            savedDoc = { ...savedDoc, companyId: matchedClient.id };
-            autoRoutedCompanyCount++;
-            fetch(`/api/documents/${savedDoc.id}`, {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ companyId: matchedClient.id }),
-            }).catch(() => {});
-          }
         }
 
         if (savedDoc) {
@@ -1078,112 +835,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         triggeredOfxCount > 0
           ? ` • Agente OFX iniciado automaticamente para ${triggeredOfxCount} extrato(s).`
           : '';
-      const routeSuffix =
-        autoRoutedCompanyCount > 0
-          ? ` • ${autoRoutedCompanyCount} documento(s) roteado(s) para a empresa do CNPJ/nome identificado.`
-          : '';
-      showToast(`Importação concluída!${splitSuffix}${ofxSuffix}${routeSuffix}`);
-    }
-  };
-
-  // Move document cleanly between companies (Master Admin only)
-  const handleMoveDocumentCompany = async (
-    docItem: CompanyDocument,
-    toCompanyId: string,
-    extraUpdates: Partial<CompanyDocument> = {},
-    silentToast = false
-  ) => {
-    if (!isMaster) return;
-    const fromCompanyId = docItem.companyId;
-    if (!toCompanyId || fromCompanyId === toCompanyId) return;
-
-    const b64 = docItem.fileBase64 || (await resolveFileBase64(docItem));
-    const movedDoc: CompanyDocument = {
-      ...docItem,
-      ...extraUpdates,
-      companyId: toCompanyId,
-      fileBase64: b64 || undefined,
-      hasOriginalFile: Boolean(b64 || docItem.hasOriginalFile),
-      updatedAt: new Date().toISOString(),
-    };
-
-    try {
-      await fetch(`/api/documents/${docItem.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...extraUpdates,
-          companyId: toCompanyId,
-        }),
-      });
-    } catch (err) {
-      console.warn('API move document warning:', err);
-    }
-
-    try {
-      await moveDocumentInFirestore(fromCompanyId, toCompanyId, movedDoc);
-    } catch (fErr) {
-      console.warn('Firestore move document warning:', fErr);
-    }
-
-    // Update localStorage cache for old and new companies
-    try {
-      const oldKey = `contsuite_cached_docs_${fromCompanyId}`;
-      const oldRaw = localStorage.getItem(oldKey);
-      if (oldRaw) {
-        const parsed = JSON.parse(oldRaw) as CompanyDocument[];
-        localStorage.setItem(oldKey, JSON.stringify(parsed.filter((d) => d.id !== docItem.id)));
-      }
-      const newKey = `contsuite_cached_docs_${toCompanyId}`;
-      const newRaw = localStorage.getItem(newKey);
-      const newArr = newRaw ? (JSON.parse(newRaw) as CompanyDocument[]) : [];
-      const { fileBase64: _, ...compactMoved } = movedDoc;
-      localStorage.setItem(
-        newKey,
-        JSON.stringify([compactMoved, ...newArr.filter((d) => d.id !== docItem.id)])
-      );
-    } catch {}
-
-    setDocuments((prev) => {
-      const next = isDocInScope(movedDoc)
-        ? prev.map((d) => (d.id === docItem.id ? { ...movedDoc, fileBase64: undefined } : d))
-        : prev.filter((d) => d.id !== docItem.id);
-      persistCacheList(next);
-      return next;
-    });
-
-    if (selectedDoc?.id === docItem.id) {
-      if (isDocInScope(movedDoc)) {
-        setSelectedDoc({ ...movedDoc, fileBase64: undefined });
-      } else {
-        closeDetailModal();
-      }
-    }
-
-    if (!silentToast) {
-      const destComp = visibleCompanies.find((c) => c.id === toCompanyId);
-      showToast(
-        `Documento movido para "${destComp?.fantasyName || destComp?.name || toCompanyId}" com sucesso!`
-      );
-    }
-  };
-
-  // Bulk-reorganize misfiled client docs currently inside Bento Contabilidade -> respective client companies
-  const handleReorganizeMisfiledDocs = async () => {
-    if (!isMaster || misfiledMasterDocs.length === 0) return;
-    setReorganizingMisfiled(true);
-    let movedCount = 0;
-    try {
-      for (const item of misfiledMasterDocs) {
-        await handleMoveDocumentCompany(item.doc, item.targetCompany.id, {}, true);
-        movedCount++;
-      }
-      showToast(
-        `${movedCount} ${movedCount === 1 ? 'documento movido' : 'documentos movidos'} de Bento Contabilidade para suas respectivas empresas!`
-      );
-      await loadDocuments(false);
-    } finally {
-      setReorganizingMisfiled(false);
+      showToast(`Importação concluída!${splitSuffix}${ofxSuffix}`);
     }
   };
 
@@ -1196,11 +848,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     const existing = documents.find((d) => d.id === docId);
     if (!existing) return;
 
-    const docCompanyId = existing.companyId || currentCompany.id;
     const optimistic: CompanyDocument = {
       ...existing,
       ...updates,
-      companyId: docCompanyId,
       updatedAt: new Date().toISOString(),
     };
 
@@ -1233,7 +883,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     }
 
     try {
-      await saveDocumentToFirestore(docCompanyId, optimistic);
+      await saveDocumentToFirestore(currentCompany.id, optimistic);
     } catch (fErr) {
       console.warn('Firestore update document warning:', fErr);
     }
@@ -1245,9 +895,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
   // Delete document
   const handleDeleteDocument = async (docId: string) => {
-    const existing = documents.find((d) => d.id === docId);
-    const docCompanyId = existing?.companyId || currentCompany.id;
-
     setDocuments((prev) => {
       const next = prev.filter((d) => d.id !== docId);
       persistCacheList(next);
@@ -1265,7 +912,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     } catch {}
 
     try {
-      await deleteDocumentFromFirestore(docCompanyId, docId);
+      await deleteDocumentFromFirestore(currentCompany.id, docId);
     } catch (fErr) {
       console.warn('Firestore delete document warning:', fErr);
     }
@@ -1289,7 +936,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     return 'image/jpeg';
   };
 
-  // Fetch file binary (In-memory -> IndexedDB -> API -> Firestore binary chunks)
+  // Fetch file binary (In-memory -> IndexedDB -> API)
   const resolveFileBase64 = async (docItem: CompanyDocument): Promise<string | null> => {
     if (docItem.fileBase64) return cleanBase64(docItem.fileBase64);
     const localB64 = await getBlobFromIdb(docItem.id);
@@ -1306,17 +953,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         }
       }
     } catch {}
-
-    try {
-      const targetCompanyId = docItem.companyId || currentCompany.id;
-      const cloudB64 = await fetchDocumentBinaryFromFirestore(targetCompanyId, docItem.id);
-      if (cloudB64) {
-        const cleaned = cleanBase64(cloudB64);
-        await saveBlobToIdb(docItem.id, cleaned);
-        return cleaned;
-      }
-    } catch {}
-
     return null;
   };
 
@@ -1364,7 +1000,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     setConfirmDeleteId(null);
     setIsPreviewExpanded(false);
     setEditDraft({
-      targetCompanyId: docItem.companyId || currentCompany.id,
       category: docItem.category,
       status: docItem.status,
       competenceMonth: docItem.competenceMonth || new Date().toISOString().slice(0, 7),
@@ -1388,16 +1023,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     applyPreviewContent(docItem, b64);
     setLoadingPreview(false);
   };
-
-  // Automatically insert and open freshly scanned document PDF when redirected from Digitalizar
-  useEffect(() => {
-    if (pendingPreviewDoc && (isDocInScope(pendingPreviewDoc) || pendingPreviewDoc.companyId === currentCompany.id)) {
-      mergeDocsIntoState([pendingPreviewDoc]);
-      void openDetailModal(pendingPreviewDoc);
-      onConsumePendingPreviewDoc?.();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingPreviewDoc, currentCompany.id]);
 
   const handleReattachFile = async (docItem: CompanyDocument, file: File) => {
     try {
@@ -1540,7 +1165,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     const parsedAmt = editDraft.amount.trim()
       ? Number(editDraft.amount.replace(',', '.'))
       : undefined;
-    const fieldUpdates: Partial<CompanyDocument> = {
+    await handleUpdateDocument(selectedDoc.id, {
       category: editDraft.category,
       status: editDraft.status,
       competenceMonth: editDraft.competenceMonth || selectedDoc.competenceMonth,
@@ -1550,17 +1175,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       amount: parsedAmt !== undefined && !isNaN(parsedAmt) ? parsedAmt : undefined,
       detectedCnpj: editDraft.detectedCnpj || undefined,
       notes: editDraft.notes || undefined,
-    };
-
-    if (
-      isMaster &&
-      editDraft.targetCompanyId &&
-      editDraft.targetCompanyId !== selectedDoc.companyId
-    ) {
-      await handleMoveDocumentCompany(selectedDoc, editDraft.targetCompanyId, fieldUpdates);
-    } else {
-      await handleUpdateDocument(selectedDoc.id, fieldUpdates);
-    }
+    });
     setSavingDetail(false);
   };
 
@@ -1698,12 +1313,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       (docProcJob?.status === 'done' ||
         Boolean(docItem.notes && docItem.notes.includes('[Processado IA]')));
 
-    const docCompany =
-      isMaster
-        ? visibleCompanies.find((c) => c.id === docItem.companyId)
-        : undefined;
-    const showCompanyBadge = Boolean(isMaster && isGlobalMasterScope && docCompany);
-
     return (
       <div
         key={docItem.id}
@@ -1718,16 +1327,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           draggingDocId === docItem.id ? 'opacity-50' : ''
         }`}
       >
-        {/* Master Global Company Badge */}
-        {showCompanyBadge && docCompany && (
-          <div className="mb-1.5 flex items-center gap-1.5">
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-50 border border-teal-200 text-[10px] font-bold text-teal-800 truncate max-w-full">
-              <Building2 className="w-3 h-3 shrink-0" />
-              <span className="truncate">{docCompany.fantasyName || docCompany.name}</span>
-            </span>
-          </div>
-        )}
-
         {/* Top line: Icon + File Name */}
         <div className="flex items-start gap-2.5">
           <div className="w-8 h-8 rounded-lg bg-slate-100 text-slate-700 flex items-center justify-center shrink-0 mt-0.5">
@@ -2090,22 +1689,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
             {isMaster ? (
               <select
-                value={masterViewAll ? '__all__' : currentCompany.id}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  if (val === '__all__') {
-                    setMasterViewAll(true);
-                    setExplorerCompanyId(null);
-                    setExplorerCategory(null);
-                  } else {
-                    setMasterViewAll(false);
-                    onSelectCompany(val);
-                  }
-                }}
+                value={currentCompany.id}
+                onChange={(e) => onSelectCompany(e.target.value)}
                 aria-label="Selecionar empresa"
-                className="text-xs font-semibold text-slate-800 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-600 cursor-pointer max-w-[215px] xl:max-w-[235px]"
+                className="text-xs font-semibold text-slate-800 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-600 cursor-pointer max-w-[190px] xl:max-w-[210px]"
               >
-                <option value="__all__">🌐 Todas as Empresas (Master)</option>
                 {visibleCompanies.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.fantasyName || c.name}
@@ -2477,48 +2065,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         </div>
       </div>
 
-      {/* Misfiled Documents Reorganization Banner (Master Only) */}
-      {isMaster && misfiledMasterDocs.length > 0 && (
-        <div className="bg-amber-50 border border-amber-300 rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-start gap-2.5 min-w-0">
-            <AlertCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-            <div className="min-w-0">
-              <p className="text-xs font-bold text-amber-950">
-                {misfiledMasterDocs.length}{' '}
-                {misfiledMasterDocs.length === 1
-                  ? 'documento encontrado em Bento Contabilidade que pertence a outro cliente'
-                  : 'documentos encontrados em Bento Contabilidade que pertencem a outros clientes'}
-              </p>
-              <p className="text-[11px] text-amber-800 mt-0.5 truncate">
-                Ex:{' '}
-                {misfiledMasterDocs
-                  .slice(0, 3)
-                  .map(
-                    (m) =>
-                      `${m.doc.fileName} → ${m.targetCompany.fantasyName || m.targetCompany.name}`
-                  )
-                  .join(' · ')}
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => void handleReorganizeMisfiledDocs()}
-            disabled={reorganizingMisfiled}
-            className="px-3.5 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer shrink-0 disabled:opacity-60 whitespace-nowrap"
-          >
-            {reorganizingMisfiled ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <ArrowRight className="w-3.5 h-3.5" />
-            )}
-            <span>
-              {reorganizingMisfiled ? 'Movendo arquivos...' : 'Mover para Respectivas Empresas'}
-            </span>
-          </button>
-        </div>
-      )}
-
       {/* Main Content */}
       {loading ? (
         <div className="bg-white border border-slate-200 rounded-xl p-12 flex flex-col items-center justify-center text-slate-500 gap-2">
@@ -2542,29 +2088,14 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
                 {visibleCompanies.map((comp) => {
-                  const linkedUsers = allUsers.filter(
-                    (u) =>
-                      u.companyId === comp.id ||
-                      (comp.createdByEmail && u.email?.toLowerCase().trim() === comp.createdByEmail.toLowerCase().trim())
-                  );
-                  const ownerLabel =
-                    linkedUsers[0]?.name ||
-                    comp.createdByName ||
-                    comp.createdByEmail ||
-                    (comp.id === 'comp-master' ? 'Rodrigo Bento (Master)' : '');
-                  const compDocs = documents.filter((d) => d.companyId === comp.id);
-                  const compPending = compDocs.filter((d) => d.status === 'pendente').length;
+                  const folderLabel = `${comp.fantasyName || comp.name} - ${comp.cnpj}`;
                   return (
                     <div
                       key={comp.id}
                       onClick={() => {
-                        clickingExplorerFolderRef.current = true;
-                        setMasterViewAll(false);
                         setExplorerCompanyId(comp.id);
                         setExplorerCategory(null);
-                        if (isMaster && comp.id !== currentCompany.id) {
-                          onSelectCompany(comp.id);
-                        }
+                        if (isMaster) onSelectCompany(comp.id);
                       }}
                       className="p-4 rounded-2xl bg-white border border-slate-200 hover:border-teal-400 hover:shadow-md transition cursor-pointer flex items-start gap-3 group"
                     >
@@ -2572,26 +2103,15 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                         <FolderOpen className="w-6 h-6" />
                       </div>
                       <div className="min-w-0 flex-1 space-y-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-[10px] font-bold text-teal-700 uppercase tracking-wider truncate">
-                            Pasta do Cliente
-                          </span>
-                          <span className="text-[10px] font-mono font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-full shrink-0">
-                            {compDocs.length} {compDocs.length === 1 ? 'arq.' : 'arqs.'}
-                            {compPending > 0 ? ` · ${compPending} pend.` : ''}
-                          </span>
-                        </div>
+                        <span className="text-[10px] font-bold text-teal-700 uppercase tracking-wider block">
+                          Pasta do Cliente
+                        </span>
                         <h4 className="font-extrabold text-slate-900 text-sm truncate group-hover:text-teal-800 transition">
                           {comp.fantasyName || comp.name}
                         </h4>
                         <p className="text-xs text-slate-500 font-mono">
                           {comp.cnpj}
                         </p>
-                        {isMaster && ownerLabel && (
-                          <p className="text-[10px] text-indigo-700 font-semibold truncate">
-                            Usuário: {ownerLabel}
-                          </p>
-                        )}
                         <div className="pt-2 flex items-center justify-between text-[11px] text-slate-400">
                           <span>Sistema: {comp.accountingSystem.toUpperCase()}</span>
                           <span className="text-teal-700 font-bold group-hover:underline flex items-center gap-1">
@@ -2608,7 +2128,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             /* Level 2: Category Subfolders inside Selected Company */
             <div className="space-y-4">
               {(() => {
-                const comp = visibleCompanies.find((c) => c.id === explorerCompanyId) || currentCompany;
+                const comp = allCompanies.find((c) => c.id === explorerCompanyId) || currentCompany;
                 return (
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
                     <div className="flex items-center gap-2.5">
@@ -2663,7 +2183,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             /* Level 3: Documents List inside Category Subfolder */
             <div className="space-y-4">
               {(() => {
-                const comp = visibleCompanies.find((c) => c.id === explorerCompanyId) || currentCompany;
+                const comp = allCompanies.find((c) => c.id === explorerCompanyId) || currentCompany;
                 const catMeta = CATEGORY_COLUMNS.find((c) => c.id === explorerCategory);
                 const catDocs = filteredDocs.filter((d) => d.category === explorerCategory);
                 return (
@@ -2835,12 +2355,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                     <th className="py-2.5 px-3.5 text-right">Ações</th>
                   </tr>
                 </thead>
-                    <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-slate-100">
                   {filteredDocs.map((docItem) => {
                     const Icon = getFileIcon(docItem.mimeType, docItem.fileName);
-                    const rowCompany = isMaster
-                      ? visibleCompanies.find((c) => c.id === docItem.companyId)
-                      : undefined;
                     return (
                       <tr
                         key={docItem.id}
@@ -2854,10 +2371,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                               <p className="font-semibold text-slate-900 truncate">
                                 {docItem.fileName}
                               </p>
-                              <p className="text-[11px] text-slate-400 tabular-nums truncate">
-                                {isMaster && isGlobalMasterScope && rowCompany
-                                  ? `${rowCompany.fantasyName || rowCompany.name} · `
-                                  : ''}
+                              <p className="text-[11px] text-slate-400 tabular-nums">
                                 {formatFileSize(docItem.fileSize)}
                                 {docItem.documentNumber ? ` · Doc. ${docItem.documentNumber}` : ''}
                               </p>
@@ -3344,30 +2858,6 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 )}
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {isMaster && (
-                    <div className="sm:col-span-2">
-                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                        Empresa / Pasta de Destino (Master)
-                      </label>
-                      <select
-                        value={editDraft.targetCompanyId}
-                        onChange={(e) =>
-                          setEditDraft({
-                            ...editDraft,
-                            targetCompanyId: e.target.value,
-                          })
-                        }
-                        className="w-full text-xs font-semibold bg-teal-50/60 border border-teal-200 rounded-lg px-2.5 py-2 text-slate-900 focus:outline-none focus:border-teal-600"
-                      >
-                        {visibleCompanies.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.fantasyName || c.name} ({c.cnpj})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-700 mb-1">
                       Tipo de Documento

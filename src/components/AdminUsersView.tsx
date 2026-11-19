@@ -24,12 +24,9 @@ import {
   ChevronRight,
   Settings,
   HelpCircle,
-  Inbox,
-  FolderOpen,
-  ArrowRight
+  Inbox
 } from 'lucide-react';
 import { User, Company } from '../types';
-import { AppNavTab } from './Sidebar';
 
 interface AdminUsersViewProps {
   currentUser: User;
@@ -44,7 +41,6 @@ interface AdminUsersViewProps {
     existingCompanyId?: string;
   }) => Promise<{ user: User; emailPreview: any }>;
   onSwitchUserContext: (userId: string) => void;
-  onNavigateCompany?: (company: Company, tab?: AppNavTab) => void;
   onRefreshUsers: () => void;
   onUpdateUserStatus?: (userId: string, newStatus: 'active' | 'pending') => Promise<void>;
   onDeleteUser?: (userId: string) => Promise<void>;
@@ -57,7 +53,6 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
   allCompanies,
   onInviteUser,
   onSwitchUserContext,
-  onNavigateCompany,
   onRefreshUsers,
   onUpdateUserStatus,
   onDeleteUser,
@@ -267,18 +262,6 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
 
   const pendingUsers = allUsers.filter(u => u.status === 'pending');
   const activeUsers = allUsers.filter(u => u.status !== 'pending');
-
-  const getUserCompanies = (u: User & { company?: Company }): Company[] => {
-    const email = (u.email || '').toLowerCase().trim();
-    const matched = allCompanies.filter(
-      (c) =>
-        c.id === u.companyId ||
-        (u.id && c.createdByUserId === u.id) ||
-        (email && c.createdByEmail && c.createdByEmail.toLowerCase().trim() === email)
-    );
-    if (matched.length > 0) return matched;
-    return u.company ? [u.company] : [];
-  };
 
   // Filtered users
   const filteredUsers = allUsers.filter(u => {
@@ -542,8 +525,6 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                   filteredUsers.map((u) => {
                     const isCurrentUser = u.id === currentUser.id;
                     const isPending = u.status === 'pending';
-                    const userCompanies = getUserCompanies(u);
-                    const primaryCompany = userCompanies[0] || u.company;
                     return (
                       <tr key={u.id} className="hover:bg-slate-50/70 transition">
                         <td className="py-2.5 px-3 sm:px-4">
@@ -561,22 +542,16 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                           </div>
                           {/* Show company on mobile where column is hidden */}
                           <div className="text-[10px] text-teal-700 font-medium md:hidden truncate max-w-[180px]">
-                            {primaryCompany?.fantasyName || primaryCompany?.name || 'Sem empresa'}
-                            {userCompanies.length > 1 ? ` (+${userCompanies.length - 1})` : ''}
+                            {u.company?.fantasyName || u.company?.name || 'Sem empresa'}
                           </div>
                         </td>
 
                         <td className="py-2.5 px-3 hidden md:table-cell">
                           <div className="font-semibold text-slate-800 truncate max-w-[200px]">
-                            {primaryCompany?.fantasyName || primaryCompany?.name || 'Não vinculada'}
-                            {userCompanies.length > 1 && (
-                              <span className="ml-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded bg-teal-50 text-teal-800 border border-teal-200">
-                                +{userCompanies.length - 1}
-                              </span>
-                            )}
+                            {u.company?.fantasyName || u.company?.name || 'Não vinculada'}
                           </div>
                           <div className="text-[10px] text-slate-400 font-mono">
-                            CNPJ: {primaryCompany?.cnpj || 'N/A'}
+                            CNPJ: {u.company?.cnpj || 'N/A'}
                           </div>
                         </td>
 
@@ -641,17 +616,6 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                             >
                               <RotateCw className="w-3 h-3 text-amber-600 shrink-0" />
                               <span className="hidden sm:inline">Reenviar Convite</span>
-                            </button>
-                          )}
-
-                          {onNavigateCompany && primaryCompany && (
-                            <button
-                              onClick={() => onNavigateCompany(primaryCompany, 'documents')}
-                              className="px-2.5 py-1 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 font-bold text-[11px] inline-flex items-center gap-1 transition cursor-pointer"
-                              title={`Navegar como Master na empresa ${primaryCompany.fantasyName || primaryCompany.name}`}
-                            >
-                              <Building2 className="w-3 h-3 text-teal-700 shrink-0" />
-                              <span className="hidden sm:inline">Navegar</span>
                             </button>
                           )}
 
@@ -898,20 +862,12 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {allCompanies.map((comp) => {
-              const linkedUsers = allUsers.filter(
-                (u) =>
-                  u.companyId === comp.id ||
-                  (comp.createdByEmail &&
-                    u.email?.toLowerCase().trim() === comp.createdByEmail.toLowerCase().trim())
-              );
-              const usersCount = linkedUsers.length;
-              const ownerLabel =
-                linkedUsers[0]?.name || comp.createdByName || comp.createdByEmail || '';
+              const usersCount = allUsers.filter(u => u.companyId === comp.id).length;
               const isMaster = comp.id === 'comp-master';
               return (
                 <div
                   key={comp.id}
-                  className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-white hover:border-teal-300 transition flex flex-col justify-between space-y-2.5"
+                  className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-white hover:border-teal-300 transition flex flex-col justify-between space-y-2"
                 >
                   <div>
                     <div className="flex items-center justify-between gap-1 mb-1">
@@ -930,43 +886,16 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                     <p className="text-[10px] text-slate-400 truncate">
                       Sistema: {comp.accountingSystem.toUpperCase()}
                     </p>
-                    {ownerLabel && (
-                      <p className="text-[10px] text-teal-800 font-semibold truncate mt-1">
-                        Responsável: {ownerLabel}
-                      </p>
-                    )}
                   </div>
 
-                  <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between gap-2 text-[11px] text-slate-500">
-                    <span className="flex items-center gap-1 shrink-0">
+                  <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between text-[11px] text-slate-500">
+                    <span className="flex items-center gap-1">
                       <Users className="w-3 h-3 text-teal-600" />
                       {usersCount} {usersCount === 1 ? 'usuário' : 'usuários'}
                     </span>
-
-                    {onNavigateCompany ? (
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          onClick={() => onNavigateCompany(comp, 'documents')}
-                          className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[10px] inline-flex items-center gap-1 transition cursor-pointer"
-                          title="Abrir Arquivos da Empresa"
-                        >
-                          <FolderOpen className="w-3 h-3" />
-                          <span>Arquivos</span>
-                        </button>
-                        <button
-                          onClick={() => onNavigateCompany(comp, 'companies')}
-                          className="px-2.5 py-1 rounded-lg bg-[#00897b] hover:bg-teal-700 text-white font-bold text-[10px] inline-flex items-center gap-1 transition cursor-pointer"
-                          title="Navegar nesta empresa mantendo acesso Master"
-                        >
-                          <span>Navegar</span>
-                          <ArrowRight className="w-3 h-3" />
-                        </button>
-                      </div>
-                    ) : (
-                      <span className="text-teal-800 font-semibold text-[10px]">
-                        Isolamento Ativo
-                      </span>
-                    )}
+                    <span className="text-teal-800 font-semibold text-[10px]">
+                      Isolamento Ativo
+                    </span>
                   </div>
                 </div>
               );

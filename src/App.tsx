@@ -19,7 +19,7 @@ import { HelpCenterModal } from './components/HelpCenterModal';
 import { DocumentScannerModal } from './components/DocumentScannerModal';
 import { AssetSmartImportModal } from './components/AssetSmartImportModal';
 import { OfxAgentProvider } from './context/OfxAgentContext';
-import { User, Company, CompanyDocument, Asset, DepreciationSummary, ConvertedStatement } from './types';
+import { User, Company, Asset, DepreciationSummary, ConvertedStatement } from './types';
 import { isMasterUser, filterCompaniesForUser } from './utils/auth';
 import { Loader2, AlertCircle, CheckCircle } from 'lucide-react';
 import { 
@@ -28,45 +28,18 @@ import {
   subscribeToAuth,
   saveCompanyToFirestore,
   fetchCompaniesFromFirestore,
-  fetchAssetsFromFirestore,
   saveAssetToFirestore,
   deleteAssetFromFirestore,
   saveStatementToFirestore,
   fetchStatementsFromFirestore,
   deleteStatementFromFirestore,
-  fetchDocumentsFromFirestore,
-  fetchDocumentBinaryFromFirestore,
   syncUserToFirestore,
   fetchUsersFromFirestore,
   deleteUserFromFirestore
 } from './firebase/service';
 
-const SESSION_USER_KEY = 'contsuite_session_user';
-const SESSION_COMPANY_KEY = 'contsuite_session_company';
-
-const NEUTRAL_GUEST_USER: User = {
-  id: '',
-  name: 'Usuário',
-  email: '',
-  role: 'client',
-  companyId: '',
-  createdAt: '',
-  status: 'active',
-};
-
-const NEUTRAL_EMPTY_COMPANY: Company = {
-  id: '',
-  name: 'Nenhuma empresa vinculada',
-  cnpj: '00.000.000/0000-00',
-  fantasyName: 'Sem Empresa Selecionada',
-  contactEmail: '',
-  phone: '',
-  accountingSystem: 'dominio',
-  createdAt: '',
-};
-
 export default function App() {
-  // Restore persisted session accurately instead of defaulting to Master
+  // Start unauthenticated so user sees the login screen from the image attachment
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
     return localStorage.getItem('contsuite_logged_in') === 'true';
   });
@@ -74,36 +47,30 @@ export default function App() {
   // Default tab is 'home' so the user is greeted by the AI agent without entering any raw tables
   const [activeTab, setActiveTab] = useState<AppNavTab>('home');
 
-  const [currentUser, setCurrentUser] = useState<User>(() => {
-    try {
-      if (localStorage.getItem('contsuite_logged_in') === 'true') {
-        const raw = localStorage.getItem(SESSION_USER_KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (parsed && parsed.email) return parsed;
-        }
-      }
-    } catch {}
-    return NEUTRAL_GUEST_USER;
+  const [currentUser, setCurrentUser] = useState<User>({
+    id: 'usr-admin-1',
+    name: 'Rodrigo Bento',
+    email: 'rodrigobento1979@gmail.com',
+    role: 'admin',
+    companyId: 'comp-master',
+    createdAt: '2026-01-01T08:00:00.000Z',
+    status: 'active',
   });
 
-  const [currentCompany, setCurrentCompany] = useState<Company>(() => {
-    try {
-      if (localStorage.getItem('contsuite_logged_in') === 'true') {
-        const rawUser = localStorage.getItem(SESSION_USER_KEY);
-        const parsedUser = rawUser ? JSON.parse(rawUser) : null;
-        const rawComp = localStorage.getItem(SESSION_COMPANY_KEY);
-        if (rawComp) {
-          const parsedComp = JSON.parse(rawComp);
-          if (parsedComp && parsedComp.id) {
-            if (parsedComp.id !== 'comp-master' || isMasterUser(parsedUser)) {
-              return parsedComp;
-            }
-          }
-        }
-      }
-    } catch {}
-    return NEUTRAL_EMPTY_COMPANY;
+  const [currentCompany, setCurrentCompany] = useState<Company>({
+    id: 'comp-master',
+    name: 'Bento & Associados Consultoria Contábil',
+    cnpj: '12.345.678/0001-90',
+    fantasyName: 'Bento Contabilidade',
+    contactEmail: 'rodrigobento1979@gmail.com',
+    phone: '(11) 98765-4321',
+    accountingSystem: 'dominio',
+    chartOfAccounts: {
+      assetDefaultAccount: '1.2.3.01.0001',
+      depreciationExpenseAccount: '3.1.2.04.0010',
+      accumulatedDepreciationAccount: '1.2.3.09.0001',
+    },
+    createdAt: '2026-01-01T08:00:00.000Z',
   });
 
   const [allCompanies, setAllCompanies] = useState<Company[]>([]);
@@ -112,10 +79,8 @@ export default function App() {
   const [depreciationSummary, setDepreciationSummary] = useState<DepreciationSummary | null>(null);
   const [statements, setStatements] = useState<ConvertedStatement[]>([]);
 
-  // Firebase auth user & readiness
+  // Firebase auth user
   const [firebaseUser, setFirebaseUser] = useState<any>(null);
-  const [firebaseAuthReady, setFirebaseAuthReady] = useState(false);
-  const firebaseUid = firebaseUser?.uid || '';
 
   // Period for depreciation
   const [selectedMonth, setSelectedMonth] = useState<string>('2026-11');
@@ -132,7 +97,6 @@ export default function App() {
   const [isScannerModalOpen, setIsScannerModalOpen] = useState(false);
   const [isAssetSmartImportOpen, setIsAssetSmartImportOpen] = useState(false);
   const [pendingOfxFile, setPendingOfxFile] = useState<File | null>(null);
-  const [pendingScannedDoc, setPendingScannedDoc] = useState<CompanyDocument | null>(null);
 
   const handleOpenCompanyModalWithPrefill = (prefill: { name?: string; cnpj?: string; fantasyName?: string }) => {
     setCompanyToEdit(null);
@@ -164,13 +128,6 @@ export default function App() {
   useEffect(() => {
     currentCompanyIdRef.current = currentCompany.id;
   }, [currentCompany.id]);
-
-  const isAuthenticatedRef = useRef(isAuthenticated);
-  const currentUserEmailRef = useRef(currentUser.email);
-  useEffect(() => {
-    isAuthenticatedRef.current = isAuthenticated;
-    currentUserEmailRef.current = currentUser.email;
-  }, [isAuthenticated, currentUser.email]);
 
   // Resilient fetch wrapper for transient dev-server restarts or cold starts
   const fetchWithRetry = useCallback(async (
@@ -215,37 +172,8 @@ export default function App() {
     }
   };
 
-  // Persist active session user & company across reloads (never leak between accounts)
-  useEffect(() => {
-    if (!isAuthenticated || !currentUser.email) return;
-    try {
-      localStorage.setItem(SESSION_USER_KEY, JSON.stringify(currentUser));
-      if (currentCompany && currentCompany.id) {
-        if (currentCompany.id !== 'comp-master' || isMasterUser(currentUser)) {
-          localStorage.setItem(SESSION_COMPANY_KEY, JSON.stringify(currentCompany));
-        }
-      }
-    } catch {}
-  }, [isAuthenticated, currentUser, currentCompany]);
-
-  // Enforce Master-only route guard
-  useEffect(() => {
-    if (isAuthenticated && currentUser.email && !isMasterUser(currentUser)) {
-      if (activeTab === 'admin' || activeTab === 'database') {
-        setActiveTab('home');
-      }
-    }
-  }, [isAuthenticated, currentUser, activeTab]);
-
-  const masterMirrorSyncedRef = useRef<string | null>(null);
-
   // 1. Fetch Companies and Users (Somente Usuário Master vê TODAS as empresas; demais usuários veem apenas suas próprias empresas)
   const fetchCompaniesAndUsers = useCallback(async () => {
-    if (!isAuthenticated || !currentUser.email) {
-      setAllCompanies([]);
-      return;
-    }
-
     const normCurrentEmail = (currentUser.email || '').toLowerCase().trim();
     const canViewAllCompanies = isMasterUser(currentUser);
 
@@ -281,14 +209,7 @@ export default function App() {
       console.warn('Could not load users/companies from Firestore:', fErr);
     }
 
-    // Read cached users early so we can also recover embedded company records
-    let localUsers: User[] = [];
-    try {
-      const cached = localStorage.getItem('contsuite_cached_users');
-      if (cached) localUsers = JSON.parse(cached);
-    } catch {}
-
-    // Merge Companies from API, Firestore, user records, and LocalStorage
+    // Merge Companies from API, Firestore, and LocalStorage (cache only for Master)
     let localComps: Company[] = [];
     if (canViewAllCompanies) {
       try {
@@ -297,28 +218,10 @@ export default function App() {
       } catch {}
     }
 
-    const userEmbeddedCompanies: Company[] = canViewAllCompanies
-      ? [...apiUsers, ...firestoreUsers, ...localUsers]
-          .map((u: any) => u?.company)
-          .filter((c: any): c is Company => Boolean(c && c.id))
-      : [...apiUsers, ...firestoreUsers, ...localUsers]
-          .filter((u: any) => {
-            const uEmail = (u?.email || '').toLowerCase().trim();
-            return (
-              (normCurrentEmail && uEmail === normCurrentEmail) ||
-              (currentUser.id && u?.id === currentUser.id)
-            );
-          })
-          .map((u: any) => u?.company)
-          .filter((c: any): c is Company => Boolean(c && c.id && c.id !== 'comp-master'));
-
     const compMap = new Map<string, Company>();
     const rawCompanySources = canViewAllCompanies
-      ? [...localComps, ...userEmbeddedCompanies, ...firestoreCompanies, ...apiComps]
-      : filterCompaniesForUser(
-          [...userEmbeddedCompanies, ...firestoreCompanies, ...apiComps],
-          currentUser
-        );
+      ? [...localComps, ...firestoreCompanies, ...apiComps]
+      : filterCompaniesForUser([...firestoreCompanies, ...apiComps], currentUser);
 
     rawCompanySources.forEach(c => {
       if (c && c.id) {
@@ -327,7 +230,61 @@ export default function App() {
     });
     const mergedComps = Array.from(compMap.values());
 
+    // 2-way sync for Master Admin so companies created by users via either API or Firestore appear everywhere
+    if (canViewAllCompanies && mergedComps.length > 0) {
+      const apiIds = new Set(apiComps.map(c => c.id));
+      const missingInApi = mergedComps.filter(c => !apiIds.has(c.id));
+      if (missingInApi.length > 0) {
+        fetch('/api/companies/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ companies: missingInApi }),
+        }).catch(() => {});
+      }
+
+      const firestoreIds = new Set(firestoreCompanies.map(c => c.id));
+      const missingInFirestore = mergedComps.filter(c => !firestoreIds.has(c.id));
+      if (missingInFirestore.length > 0) {
+        missingInFirestore.forEach(c => {
+          saveCompanyToFirestore(c).catch(() => {});
+        });
+      }
+    }
+
+    if (canViewAllCompanies) {
+      if (mergedComps.length > 0) {
+        setAllCompanies(mergedComps);
+        try {
+          localStorage.setItem('contsuite_cached_companies', JSON.stringify(mergedComps));
+        } catch {}
+
+        const found = mergedComps.find(c => c.id === currentCompanyIdRef.current);
+        if (found) {
+          setCurrentCompany(found);
+        } else {
+          setCurrentCompany(mergedComps[0]);
+        }
+      }
+    } else {
+      // Strict isolation for non-Master users: NEVER retain Master's companies in state
+      setAllCompanies(mergedComps);
+      if (mergedComps.length > 0) {
+        const found = mergedComps.find(c => c.id === currentCompanyIdRef.current);
+        if (found) {
+          setCurrentCompany(found);
+        } else {
+          setCurrentCompany(mergedComps[0]);
+        }
+      }
+    }
+
     // Merge Users from API, Firestore, and LocalStorage
+    let localUsers: User[] = [];
+    try {
+      const cached = localStorage.getItem('contsuite_cached_users');
+      if (cached) localUsers = JSON.parse(cached);
+    } catch {}
+
     const userMap = new Map<string, any>();
     [...apiUsers, ...firestoreUsers, ...localUsers].forEach(u => {
       if (u && (u.id || u.email)) {
@@ -348,205 +305,25 @@ export default function App() {
         localStorage.setItem('contsuite_cached_users', JSON.stringify(mergedUsers));
       } catch {}
     }
+  }, [currentUser.role, currentUser.companyId, currentUser.id, currentUser.email, fetchWithRetry]);
 
-    // 2-way sync for Master Admin so companies, users, documents, assets & statements sync from Firestore to db.json
-    if (canViewAllCompanies && mergedComps.length > 0) {
-      const apiIds = new Set(apiComps.map(c => c.id));
-      const missingInApi = mergedComps.filter(c => !apiIds.has(c.id));
-      if (missingInApi.length > 0 || mergedUsers.length > 0) {
-        fetch('/api/database/sync-mirror', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            companies: missingInApi.length > 0 ? mergedComps : [],
-            users: mergedUsers,
-          }),
-        }).catch(() => {});
-      }
-
-      const firestoreIds = new Set(firestoreCompanies.map(c => c.id));
-      const missingInFirestore = mergedComps.filter(c => !firestoreIds.has(c.id));
-      if (missingInFirestore.length > 0) {
-        missingInFirestore.forEach(c => {
-          saveCompanyToFirestore(c).catch(() => {});
-        });
-      }
-
-      // Mirror subcollections from Firestore -> API once per Master session when Firestore is populated
-      const syncKey = `${normCurrentEmail}:${mergedComps.length}`;
-      if (masterMirrorSyncedRef.current !== syncKey && firestoreCompanies.length > 0) {
-        masterMirrorSyncedRef.current = syncKey;
-        Promise.all(
-          mergedComps.map(async (comp) => {
-            try {
-              const [fDocs, fAssets, fStmts, existingApiRes] = await Promise.all([
-                fetchDocumentsFromFirestore(comp.id).catch(() => []),
-                fetchAssetsFromFirestore(comp.id).catch(() => []),
-                fetchStatementsFromFirestore(comp.id).catch(() => []),
-                fetch(`/api/documents?companyId=${encodeURIComponent(comp.id)}&email=${encodeURIComponent(normCurrentEmail)}`, { cache: 'no-store' }).catch(() => null),
-              ]);
-              let apiDocList: CompanyDocument[] = [];
-              if (existingApiRes && existingApiRes.ok) {
-                apiDocList = (await safeJson<CompanyDocument[]>(existingApiRes)) || [];
-              }
-              const apiDocMap = new Map(apiDocList.map(d => [d.id, d]));
-
-              // Hydrate missing PDF/image binaries from Firestore chunks for docs not yet backed in db.json
-              const hydratedDocs = await Promise.all(
-                fDocs.map(async (d) => {
-                  const apiMatch = apiDocMap.get(d.id);
-                  if ((!apiMatch || !apiMatch.hasOriginalFile) && d.hasOriginalFile) {
-                    try {
-                      const b64 = await fetchDocumentBinaryFromFirestore(comp.id, d.id);
-                      if (b64 && b64.length <= 3_300_000) {
-                        return { ...d, fileBase64: b64, hasOriginalFile: true };
-                      }
-                    } catch {}
-                  }
-                  return d;
-                })
-              );
-
-              if (hydratedDocs.length > 0 || fAssets.length > 0 || fStmts.length > 0) {
-                await fetch('/api/database/sync-mirror', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    documents: hydratedDocs,
-                    assets: fAssets,
-                    statements: fStmts,
-                  }),
-                }).catch(() => {});
-              }
-            } catch {}
-          })
-        ).catch(() => {});
-      }
-    } else if (!canViewAllCompanies && mergedComps.length > 0) {
-      // Ensure client's own company/user from Firestore/cache is mirrored into API too
-      const apiCompIds = new Set(apiComps.map(c => c.id));
-      const clientMissing = mergedComps.filter(c => !apiCompIds.has(c.id));
-      if (clientMissing.length > 0) {
-        fetch('/api/database/sync-mirror', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            companies: clientMissing,
-            users: [{ ...currentUser, companyId: mergedComps[0].id }],
-          }),
-        }).catch(() => {});
-      }
-    }
-
-    if (canViewAllCompanies) {
-      if (mergedComps.length > 0) {
-        setAllCompanies(mergedComps);
-        try {
-          localStorage.setItem('contsuite_cached_companies', JSON.stringify(mergedComps));
-        } catch {}
-
-        const found = mergedComps.find(c => c.id === currentCompanyIdRef.current);
-        if (found) {
-          setCurrentCompany(found);
-        } else if (firebaseAuthReady || !currentCompanyIdRef.current) {
-          setCurrentCompany(mergedComps[0]);
-        }
-      }
-    } else {
-      // Strict isolation for non-Master users: NEVER retain Master's companies in state
-      if (mergedComps.length > 0) {
-        setAllCompanies(mergedComps);
-        const found = mergedComps.find(c => c.id === currentCompanyIdRef.current);
-        if (found && found.id !== 'comp-master') {
-          setCurrentCompany(found);
-        } else {
-          setCurrentCompany(mergedComps[0]);
-          if (currentUser.companyId !== mergedComps[0].id) {
-            setCurrentUser(prev => ({ ...prev, companyId: mergedComps[0].id }));
-          }
-        }
-      } else if (firebaseAuthReady || !currentCompanyIdRef.current || currentCompanyIdRef.current === 'comp-master') {
-        setAllCompanies([]);
-        setCurrentCompany(NEUTRAL_EMPTY_COMPANY);
-      }
-    }
-  }, [isAuthenticated, currentUser.role, currentUser.companyId, currentUser.id, currentUser.email, firebaseUid, firebaseAuthReady, fetchWithRetry]);
-
-  // 2. Fetch Assets for current company (Merges API + Firestore + LocalStorage + auto-mirrors)
+  // 2. Fetch Assets for current company (Data Isolation)
   const fetchAssets = useCallback(async () => {
-    const companyId = currentCompany.id;
-    if (!companyId) {
-      setAssets([]);
-      return;
-    }
-
-    let apiAssets: Asset[] = [];
+    if (!currentCompany.id) return;
     try {
-      const res = await fetchWithRetry(`/api/assets?companyId=${companyId}`);
+      const res = await fetchWithRetry(`/api/assets?companyId=${currentCompany.id}`);
       const data = await safeJson<Asset[]>(res);
       if (data && Array.isArray(data)) {
-        apiAssets = data;
+        setAssets(data);
       }
     } catch (err) {
-      console.warn('Could not fetch assets from API right now:', err);
+      console.warn('Could not fetch assets right now:', err);
     }
-
-    let firestoreAssets: Asset[] = [];
-    try {
-      firestoreAssets = await fetchAssetsFromFirestore(companyId);
-    } catch (err) {
-      console.warn('Could not fetch assets from Firestore:', err);
-    }
-
-    let localAssets: Asset[] = [];
-    try {
-      const raw = localStorage.getItem(`contsuite_cached_assets_${companyId}`);
-      if (raw) localAssets = JSON.parse(raw);
-    } catch {}
-
-    const map = new Map<string, Asset>();
-    [...localAssets, ...firestoreAssets, ...apiAssets].forEach((a) => {
-      if (a && a.id && (!a.companyId || a.companyId === companyId)) {
-        map.set(a.id, { ...map.get(a.id), ...a, companyId });
-      }
-    });
-
-    const merged = Array.from(map.values()).sort(
-      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-    );
-    setAssets(merged);
-
-    try {
-      localStorage.setItem(`contsuite_cached_assets_${companyId}`, JSON.stringify(merged));
-    } catch {}
-
-    // Mirror Firestore/local assets missing from API back to db.json
-    const apiAssetIds = new Set(apiAssets.map(a => a.id));
-    const missingInApi = merged.filter(a => !apiAssetIds.has(a.id));
-    if (missingInApi.length > 0) {
-      fetch('/api/database/sync-mirror', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ assets: missingInApi }),
-      }).catch(() => {});
-    }
-
-    // Also push local/API assets missing from Firestore up to the cloud when Firebase Auth is active
-    if (firebaseUid) {
-      const fAssetIds = new Set(firestoreAssets.map(a => a.id));
-      const missingInFirestore = merged.filter(a => !fAssetIds.has(a.id));
-      missingInFirestore.forEach(a => {
-        saveAssetToFirestore(companyId, a).catch(() => {});
-      });
-    }
-  }, [currentCompany.id, firebaseUid, fetchWithRetry]);
+  }, [currentCompany.id, fetchWithRetry]);
 
   // 3. Fetch Depreciation Summary for current company & month
   const fetchDepreciation = useCallback(async () => {
-    if (!currentCompany.id) {
-      setDepreciationSummary(null);
-      return;
-    }
+    if (!currentCompany.id) return;
     try {
       const res = await fetchWithRetry(`/api/assets/depreciation?companyId=${currentCompany.id}&month=${selectedMonth}`);
       const data = await safeJson<DepreciationSummary>(res);
@@ -558,13 +335,10 @@ export default function App() {
     }
   }, [currentCompany.id, selectedMonth, fetchWithRetry]);
 
-  // 4. Fetch Converted Statements (Merges API + Firestore + LocalStorage + auto-mirrors)
+  // 4. Fetch Converted Statements (Merges API + Firestore + LocalStorage for instant reliability)
   const fetchStatements = useCallback(async () => {
     const companyId = currentCompany.id;
-    if (!companyId) {
-      setStatements([]);
-      return;
-    }
+    if (!companyId) return;
 
     let apiStmts: ConvertedStatement[] = [];
     try {
@@ -623,27 +397,7 @@ export default function App() {
         JSON.stringify(merged.map(({ fileBase64, ...rest }) => rest))
       );
     } catch {}
-
-    // Mirror Firestore/local statements missing from API back to db.json
-    const apiStmtIds = new Set(apiStmts.map(s => s.id));
-    const missingInApi = merged.filter(s => !apiStmtIds.has(s.id));
-    if (missingInApi.length > 0) {
-      fetch('/api/database/sync-mirror', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ statements: missingInApi }),
-      }).catch(() => {});
-    }
-
-    // Also push API/local statements missing from Firestore up to the cloud when Firebase Auth is active
-    if (firebaseUid) {
-      const fStmtIds = new Set(firestoreStmts.map(s => s.id));
-      const missingInFirestore = merged.filter(s => !fStmtIds.has(s.id));
-      missingInFirestore.forEach(s => {
-        saveStatementToFirestore(companyId, s).catch(() => {});
-      });
-    }
-  }, [currentCompany.id, firebaseUid, fetchWithRetry]);
+  }, [currentCompany.id, fetchWithRetry]);
 
   const handleStatementCreated = useCallback((stmt: ConvertedStatement) => {
     if (!stmt || !stmt.id) return;
@@ -693,63 +447,28 @@ export default function App() {
     } catch {}
   }, []);
 
-  const initialLoadDoneRef = useRef(false);
-
-  // Initial load & refresh whenever auth state or currentUser profile changes
+  // Initial load
   useEffect(() => {
     const init = async () => {
-      if (!isAuthenticated || !currentUser.email) {
-        if (!initialLoadDoneRef.current) {
-          initialLoadDoneRef.current = true;
-          setLoading(false);
-        }
-        return;
-      }
-      if (!initialLoadDoneRef.current) {
-        setLoading(true);
-      }
+      setLoading(true);
       await fetchCompaniesAndUsers();
-      if (!initialLoadDoneRef.current) {
-        initialLoadDoneRef.current = true;
-        setLoading(false);
-      }
+      setLoading(false);
     };
     init();
-  }, [fetchCompaniesAndUsers, isAuthenticated, currentUser.email]);
+  }, [fetchCompaniesAndUsers]);
 
   // Listen to Firebase Authentication state once on mount
   useEffect(() => {
     const unsubscribe = subscribeToAuth(async (user) => {
       setFirebaseUser(user);
-      setFirebaseAuthReady(true);
-
       if (user && user.email) {
         const normEmail = user.email.toLowerCase().trim();
-        const authMode = localStorage.getItem('contsuite_auth_mode');
-        const wasLoggedInSameEmail =
-          isAuthenticatedRef.current &&
-          currentUserEmailRef.current?.toLowerCase().trim() === normEmail;
-
-        // If user explicitly logged in via Email/Company or simulated profile, do not overwrite with another Google session
-        if (
-          (authMode === 'email' || authMode === 'simulated') &&
-          isAuthenticatedRef.current &&
-          currentUserEmailRef.current &&
-          currentUserEmailRef.current.toLowerCase().trim() !== normEmail
-        ) {
-          return;
-        }
-
         const isMasterEmail = isMasterUser({ email: normEmail });
 
         let resolvedRole: User['role'] = isMasterEmail ? 'admin' : 'client';
-        let resolvedCompanyId = isMasterEmail ? 'comp-master' : '';
-        let resolvedName = user.displayName || user.email.split('@')[0];
-        let matchedCompany: Company | null = null;
-        let candidateCompanies: Company[] = [];
+        let resolvedCompanyId = isMasterEmail ? (currentCompanyIdRef.current || 'comp-master') : '';
 
         if (!isMasterEmail) {
-          // 1. Check backend /api/auth/login
           try {
             const loginRes = await fetch('/api/auth/login', {
               method: 'POST',
@@ -759,112 +478,32 @@ export default function App() {
             if (loginRes.ok) {
               const loginData = await loginRes.json();
               if (loginData?.user?.role) resolvedRole = loginData.user.role;
-              if (loginData?.user?.name) resolvedName = loginData.user.name;
-              if (loginData?.user?.companyId && loginData.user.companyId !== 'comp-master') {
-                resolvedCompanyId = loginData.user.companyId;
-              }
-              if (Array.isArray(loginData?.companies)) {
-                candidateCompanies.push(...loginData.companies);
-              }
-              if (loginData?.company && loginData.company.id !== 'comp-master') {
-                matchedCompany = loginData.company;
-                resolvedCompanyId = loginData.company.id;
-              }
+              if (loginData?.user?.companyId) resolvedCompanyId = loginData.user.companyId;
             }
-          } catch {}
-
-          // 2. Also check Firestore & cached users/companies so existing users keep their real companyId
-          try {
-            const [fUsers, fComps] = await Promise.all([
-              fetchUsersFromFirestore().catch(() => []),
-              fetchCompaniesFromFirestore().catch(() => []),
-            ]);
-            const cachedUsersRaw = localStorage.getItem('contsuite_cached_users');
-            const cachedUsers: any[] = cachedUsersRaw ? JSON.parse(cachedUsersRaw) : [];
-
-            const matchedUser = [...fUsers, ...cachedUsers].find(
-              (u: any) => u?.email?.toLowerCase().trim() === normEmail
-            );
-            if (matchedUser) {
-              if (matchedUser.role && matchedUser.role !== 'admin') resolvedRole = matchedUser.role;
-              if (!resolvedCompanyId && matchedUser.companyId && matchedUser.companyId !== 'comp-master') {
-                resolvedCompanyId = matchedUser.companyId;
-              }
-              if (matchedUser.name) resolvedName = matchedUser.name;
-              if (matchedUser.company && matchedUser.company.id !== 'comp-master') {
-                candidateCompanies.push(matchedUser.company);
-              }
-            }
-            candidateCompanies.push(...fComps);
           } catch {}
         }
 
         const syncedUser: User = {
           id: user.uid,
-          name: resolvedName,
-          email: normEmail,
+          name: user.displayName || user.email.split('@')[0],
+          email: user.email,
           role: resolvedRole,
           companyId: resolvedCompanyId,
           createdAt: new Date().toISOString(),
           status: 'active',
         };
 
-        if (!isMasterEmail) {
-          const allowed = filterCompaniesForUser(candidateCompanies, syncedUser);
-          matchedCompany =
-            allowed.find(c => c.id === currentCompanyIdRef.current) ||
-            allowed.find(c => c.id === resolvedCompanyId) ||
-            allowed[0] ||
-            matchedCompany;
-          if (matchedCompany) {
-            syncedUser.companyId = matchedCompany.id;
-            setAllCompanies(allowed.length > 0 ? allowed : [matchedCompany]);
-            setCurrentCompany(matchedCompany);
-            try {
-              localStorage.setItem(SESSION_COMPANY_KEY, JSON.stringify(matchedCompany));
-            } catch {}
-          } else {
-            setAllCompanies([]);
-            setCurrentCompany(NEUTRAL_EMPTY_COMPANY);
-            localStorage.removeItem(SESSION_COMPANY_KEY);
-          }
-        } else {
-          const masterFallback: Company = {
-            id: 'comp-master',
-            name: 'Bento & Associados Consultoria Contábil',
-            cnpj: '12.345.678/0001-90',
-            fantasyName: 'Bento Contabilidade',
-            contactEmail: 'rodrigobento1979@gmail.com',
-            phone: '(11) 98765-4321',
-            accountingSystem: 'dominio',
-            createdAt: '2026-01-01T08:00:00.000Z',
-          };
-          setCurrentCompany(prev => (prev.id ? prev : masterFallback));
-        }
-
         setCurrentUser(syncedUser);
         setIsAuthenticated(true);
-        if (!wasLoggedInSameEmail) {
-          setActiveTab('home');
-          showToast(`Conectado com Google: ${normEmail}`);
-        }
+        setActiveTab('home');
         localStorage.setItem('contsuite_logged_in', 'true');
-        localStorage.setItem('contsuite_auth_mode', 'google');
-        try {
-          localStorage.setItem(SESSION_USER_KEY, JSON.stringify(syncedUser));
-        } catch {}
-
         try {
           await syncUserToFirestore(syncedUser);
         } catch (e) {
           console.warn('Could not sync user to Firestore:', e);
         }
-
-        fetch('/api/users/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user: syncedUser, company: matchedCompany }),
-        }).catch(() => {});
+        await fetchCompaniesAndUsers();
+        showToast(`Conectado com Google: ${user.email}`);
       }
     });
 
@@ -872,63 +511,32 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Login handler with resilient multi-tier lookup (API -> cached users -> Firestore -> companies fallback)
+  // Login handler with resilient multi-tier lookup (API -> cached allUsers -> localStorage -> Firestore)
   const handleLogin = async (email: string) => {
-    const normInput = email.toLowerCase().trim();
-    masterMirrorSyncedRef.current = null;
-    localStorage.setItem('contsuite_auth_mode', 'email');
-    if (firebaseUser?.email && firebaseUser.email.toLowerCase().trim() !== normInput) {
-      await logoutFirebase().catch(() => {});
-    }
+    const normEmail = email.toLowerCase().trim();
 
-    // 1. Try backend authentication (supports email, username, or company name like SSCONT)
+    // 1. Try backend authentication
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: normInput }),
+        body: JSON.stringify({ email: normEmail }),
       });
 
       if (res.ok) {
         const data = await res.json();
         if (data.user) {
-          const loggedUser: User = data.user;
-          const isMaster = isMasterUser(loggedUser);
-          const candidateCompanies: Company[] = Array.isArray(data.companies)
-            ? data.companies
-            : data.company
-              ? [data.company]
-              : [];
-          const scopedCompanies = isMaster
-            ? candidateCompanies
-            : filterCompaniesForUser(candidateCompanies, loggedUser);
-          let targetCompany = isMaster
-            ? data.company || scopedCompanies[0] || currentCompany
-            : scopedCompanies.find(c => c.id === loggedUser.companyId && c.id !== 'comp-master') ||
-              scopedCompanies.find(c => c.id !== 'comp-master') ||
-              (data.company && data.company.id !== 'comp-master' ? data.company : NEUTRAL_EMPTY_COMPANY);
-
-          if (!isMaster && targetCompany.id === 'comp-master') {
-            const validComp = scopedCompanies.find(c => c.id !== 'comp-master');
-            if (validComp) {
-              targetCompany = validComp;
-              loggedUser.companyId = validComp.id;
-            }
+          setCurrentUser(data.user);
+          if (!isMasterUser(data.user)) {
+            setAllCompanies(prev => filterCompaniesForUser(prev, data.user));
           }
-
-          setCurrentUser(loggedUser);
-          setAllCompanies(scopedCompanies);
-          setCurrentCompany(targetCompany);
+          if (data.company) {
+            setCurrentCompany(data.company);
+          }
           setIsAuthenticated(true);
           setActiveTab('home');
           localStorage.setItem('contsuite_logged_in', 'true');
-          localStorage.setItem(SESSION_USER_KEY, JSON.stringify(loggedUser));
-          if (targetCompany.id) {
-            localStorage.setItem(SESSION_COMPANY_KEY, JSON.stringify(targetCompany));
-          } else {
-            localStorage.removeItem(SESSION_COMPANY_KEY);
-          }
-          showToast(`Bem-vindo ao ContSuite, ${loggedUser.name}!`);
+          showToast(`Bem-vindo ao ContSuite, ${data.user.name}!`);
           return;
         }
       }
@@ -936,121 +544,50 @@ export default function App() {
       console.warn('Backend login attempt error:', apiErr);
     }
 
-    // 2. Resilient fallback: lookup in allUsers, API users, cached users, Firestore, or companies
-    let cachedUsers: any[] = [];
-    try {
-      const cached = localStorage.getItem('contsuite_cached_users');
-      if (cached) cachedUsers = JSON.parse(cached);
-    } catch {}
-
-    let apiUsers: any[] = [];
-    try {
-      const uRes = await fetch('/api/users', { cache: 'no-store' });
-      if (uRes.ok) apiUsers = await uRes.json();
-    } catch {}
-
-    let firestoreUsers: User[] = [];
-    try {
-      firestoreUsers = await fetchUsersFromFirestore();
-    } catch {}
-
-    const userPool = [...allUsers, ...apiUsers, ...cachedUsers, ...firestoreUsers];
-    let userCandidate: User | undefined = userPool.find(
-      (u: any) =>
-        u?.email?.toLowerCase().trim() === normInput ||
-        u?.name?.toLowerCase().trim() === normInput ||
-        u?.email?.toLowerCase().split('@')[0] === normInput
-    );
-
-    // Collect candidate companies to resolve ownership cleanly
-    let cachedComps: Company[] = [];
-    try {
-      const rawC = localStorage.getItem('contsuite_cached_companies');
-      if (rawC) cachedComps = JSON.parse(rawC);
-    } catch {}
-
-    let compPool: Company[] = [...allCompanies, ...cachedComps];
-    try {
-      const fComps = await fetchCompaniesFromFirestore();
-      compPool = [...compPool, ...fComps];
-    } catch {}
-    userPool.forEach((u: any) => {
-      if (u?.company?.id) compPool.push(u.company);
-    });
-
+    // 2. Resilient fallback: lookup in allUsers or cached users in localStorage
+    let userCandidate = allUsers.find(u => u.email.toLowerCase().trim() === normEmail);
     if (!userCandidate) {
-      const matchedComp = compPool.find(
-        c =>
-          c.id !== 'comp-master' &&
-          (c.fantasyName?.toLowerCase().trim() === normInput ||
-            c.name?.toLowerCase().trim() === normInput ||
-            c.createdByEmail?.toLowerCase().trim() === normInput ||
-            c.contactEmail?.toLowerCase().trim() === normInput)
-      );
-      if (matchedComp) {
-        const recoveredEmail = (
-          matchedComp.createdByEmail ||
-          matchedComp.contactEmail ||
-          (normInput.includes('@') ? normInput : '')
-        )
-          .toLowerCase()
-          .trim();
-        if (recoveredEmail) {
-          userCandidate = {
-            id: matchedComp.createdByUserId || 'usr-' + Date.now().toString(36),
-            name: matchedComp.createdByName || matchedComp.fantasyName || recoveredEmail.split('@')[0],
-            email: recoveredEmail,
-            role: 'client',
-            companyId: matchedComp.id,
-            createdAt: new Date().toISOString(),
-            status: 'active',
-          };
+      try {
+        const cached = localStorage.getItem('contsuite_cached_users');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          userCandidate = parsed.find((u: any) => u.email.toLowerCase().trim() === normEmail);
         }
-      }
+      } catch {}
+    }
+
+    // 3. Fallback: lookup in Firestore
+    if (!userCandidate) {
+      try {
+        const fUsers = await fetchUsersFromFirestore();
+        userCandidate = fUsers.find(u => u.email.toLowerCase().trim() === normEmail);
+      } catch {}
     }
 
     if (userCandidate) {
-      const isMaster = isMasterUser(userCandidate);
-      const activeUser: User = { ...userCandidate, status: 'active' };
-      const scopedCompanies = isMaster
-        ? compPool
-        : filterCompaniesForUser(compPool, activeUser);
-      let comp = isMaster
-        ? scopedCompanies.find(c => c.id === activeUser.companyId) || scopedCompanies[0]
-        : scopedCompanies.find(c => c.id === activeUser.companyId && c.id !== 'comp-master') ||
-          scopedCompanies.find(c => c.id !== 'comp-master') ||
-          scopedCompanies[0];
+      // Find company
+      let comp = allCompanies.find(c => c.id === userCandidate!.companyId) || (userCandidate as any).company;
 
-      if (!isMaster && comp?.id === 'comp-master') {
-        const validComp = scopedCompanies.find(c => c.id !== 'comp-master');
-        if (validComp) comp = validComp;
-      }
-
-      if (comp && !isMaster) {
-        activeUser.companyId = comp.id;
-      }
-
-      // Sync user & company to backend server
+      // Sync user to server so serverless container recognizes them
       try {
         await fetch('/api/users/sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user: activeUser, company: comp }),
+          body: JSON.stringify({ user: userCandidate, company: comp }),
         });
       } catch {}
 
+      const activeUser = { ...userCandidate, status: 'active' as const };
       setCurrentUser(activeUser);
-      setAllCompanies(scopedCompanies);
-      setCurrentCompany(comp || NEUTRAL_EMPTY_COMPANY);
+      if (!isMasterUser(activeUser)) {
+        setAllCompanies(prev => filterCompaniesForUser(prev, activeUser));
+      }
+      if (comp) {
+        setCurrentCompany(comp);
+      }
       setIsAuthenticated(true);
       setActiveTab('home');
       localStorage.setItem('contsuite_logged_in', 'true');
-      localStorage.setItem(SESSION_USER_KEY, JSON.stringify(activeUser));
-      if (comp?.id) {
-        localStorage.setItem(SESSION_COMPANY_KEY, JSON.stringify(comp));
-      } else {
-        localStorage.removeItem(SESSION_COMPANY_KEY);
-      }
       showToast(`Bem-vindo ao ContSuite, ${activeUser.name}!`);
       return;
     }
@@ -1061,7 +598,6 @@ export default function App() {
   // Google Login / Logout handlers
   const handleGoogleSignIn = async () => {
     try {
-      localStorage.setItem('contsuite_auth_mode', 'google');
       await loginWithGoogle();
       setIsAuthenticated(true);
       setActiveTab('home');
@@ -1079,36 +615,22 @@ export default function App() {
     } catch (e) {
       // ignore
     }
-    masterMirrorSyncedRef.current = null;
     setIsAuthenticated(false);
     setActiveTab('home');
-    setCurrentUser(NEUTRAL_GUEST_USER);
-    setCurrentCompany(NEUTRAL_EMPTY_COMPANY);
     setAllCompanies([]);
-    setAssets([]);
-    setStatements([]);
-    setDepreciationSummary(null);
     localStorage.removeItem('contsuite_logged_in');
-    localStorage.removeItem('contsuite_auth_mode');
-    localStorage.removeItem(SESSION_USER_KEY);
-    localStorage.removeItem(SESSION_COMPANY_KEY);
     localStorage.removeItem('contsuite_cached_companies');
-    localStorage.removeItem('contsuite_manual_ofx_job_v1');
     showToast('Sessão encerrada com sucesso.');
   };
 
   // Reload when company changes
   useEffect(() => {
-    if (isAuthenticated && currentCompany.id) {
+    if (isAuthenticated) {
       fetchAssets();
       fetchDepreciation();
       fetchStatements();
-    } else if (!currentCompany.id) {
-      setAssets([]);
-      setStatements([]);
-      setDepreciationSummary(null);
     }
-  }, [isAuthenticated, currentCompany.id, fetchAssets, fetchDepreciation, fetchStatements]);
+  }, [isAuthenticated, fetchAssets, fetchDepreciation, fetchStatements]);
 
   // Handlers for switching company (Strictly Master Admin only)
   const handleSwitchCompany = (companyId: string) => {
@@ -1123,57 +645,21 @@ export default function App() {
     }
   };
 
-  // Handlers for switching user profile (Master Admin simulates any profile cleanly)
+  // Handlers for switching user profile
   const handleSwitchUser = (user: User) => {
-    const isNextMaster = isMasterUser(user);
-    setAssets([]);
-    setStatements([]);
-    setDepreciationSummary(null);
     setCurrentUser(user);
-
-    let baseCompaniesPool = allCompanies;
-    if (isNextMaster) {
-      try {
-        const cached = localStorage.getItem('contsuite_cached_companies');
-        if (cached) {
-          const parsed = JSON.parse(cached) as Company[];
-          if (Array.isArray(parsed) && parsed.length > baseCompaniesPool.length) {
-            baseCompaniesPool = parsed;
-            setAllCompanies(parsed);
-          }
-        }
-      } catch {}
-    }
-
-    const allowedCompanies = filterCompaniesForUser(baseCompaniesPool, user);
-    if (!isNextMaster) {
+    const allowedCompanies = filterCompaniesForUser(allCompanies, user);
+    if (!isMasterUser(user)) {
       setAllCompanies(allowedCompanies);
     }
-
-    const company =
-      allowedCompanies.find(c => c.id === user.companyId) ||
-      allowedCompanies[0] ||
-      (isNextMaster ? currentCompany : NEUTRAL_EMPTY_COMPANY);
-
-    setCurrentCompany(company);
-    if (!isNextMaster && (activeTab === 'admin' || activeTab === 'database')) {
-      setActiveTab('home');
+    const company = allowedCompanies.find(c => c.id === user.companyId) || allowedCompanies[0];
+    if (company) {
+      setCurrentCompany(company);
     }
-
-    if (isNextMaster && firebaseUser?.email?.toLowerCase().trim() === (user.email || '').toLowerCase().trim()) {
-      localStorage.setItem('contsuite_auth_mode', 'google');
-    } else {
-      localStorage.setItem('contsuite_auth_mode', 'simulated');
+    if (!isMasterUser(user) && activeTab === 'admin') {
+      setActiveTab('assets');
     }
-
-    localStorage.setItem(SESSION_USER_KEY, JSON.stringify(user));
-    if (company?.id) {
-      localStorage.setItem(SESSION_COMPANY_KEY, JSON.stringify(company));
-    } else {
-      localStorage.removeItem(SESSION_COMPANY_KEY);
-    }
-
-    showToast(`Perfil alternado para: ${user.name} (${company?.fantasyName || company?.name || 'Sem Empresa'})`);
+    showToast(`Perfil alternado para: ${user.name} (${company?.fantasyName || 'Empresa'})`);
   };
 
   // Asset actions (Dual save to backend and Firebase Firestore)
@@ -1554,7 +1040,6 @@ export default function App() {
             currentUser={currentUser}
             currentCompany={currentCompany}
             allCompanies={allCompanies}
-            allUsers={allUsers}
             activeTab={activeTab}
             onSwitchCompany={handleSwitchCompany}
             onOpenUserModal={() => setIsUserModalOpen(true)}
@@ -1650,9 +1135,6 @@ export default function App() {
                   currentUser={currentUser}
                   currentCompany={currentCompany}
                   allCompanies={allCompanies}
-                  allUsers={allUsers}
-                  pendingPreviewDoc={pendingScannedDoc}
-                  onConsumePendingPreviewDoc={() => setPendingScannedDoc(null)}
                   onSelectCompany={handleSwitchCompany}
                   onOpenInOfxConverter={(file) => {
                     setPendingOfxFile(file);
@@ -1673,15 +1155,14 @@ export default function App() {
               {/* 6. Controle Financeiro de Honorários Contábeis */}
               {activeTab === 'fees' && (
                 <HonorariosView
-                  currentUser={currentUser}
                   currentCompany={currentCompany}
                   allCompanies={allCompanies}
                   showToast={showToast}
                 />
               )}
 
-              {/* 7. Gestão de Banco de Dados, Backups & Limpeza (Master Admin Only) */}
-              {activeTab === 'database' && isMasterUser(currentUser) && (
+              {/* 7. Gestão de Banco de Dados, Backups & Limpeza */}
+              {activeTab === 'database' && (
                 <DatabaseView
                   currentUser={currentUser}
                   currentCompany={currentCompany}
@@ -1705,10 +1186,6 @@ export default function App() {
                   onSwitchUserContext={(userId) => {
                     const targetUser = allUsers.find(u => u.id === userId);
                     if (targetUser) handleSwitchUser(targetUser);
-                  }}
-                  onNavigateCompany={(comp, tab) => {
-                    handleSwitchCompany(comp.id);
-                    setActiveTab(tab || 'companies');
                   }}
                   onRefreshUsers={fetchCompaniesAndUsers}
                   onUpdateUserStatus={handleUpdateUserStatus}
@@ -1786,7 +1263,6 @@ export default function App() {
         currentCompany={currentCompany}
         showToast={showToast}
         onDocumentSaved={(doc) => {
-          setPendingScannedDoc(doc);
           if (activeTab !== 'documents') setActiveTab('documents');
         }}
       />

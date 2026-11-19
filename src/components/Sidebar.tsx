@@ -315,44 +315,44 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </div>
 
-        {/* GRUPO 4: CONFIGURAÇÕES (BANCO DE DADOS & USUÁRIOS/CONVITES) - SOMENTE MASTER */}
-        {isMaster && (
-          <div className="space-y-1">
-            <button
-              onClick={() => toggleGroup('configuracoes')}
-              className="w-full flex items-center justify-between px-2 py-1 text-[10px] font-extrabold uppercase tracking-wider text-teal-300/90 hover:text-white transition cursor-pointer"
-            >
-              <div className="flex items-center gap-1.5">
-                <Settings className="w-3.5 h-3.5 text-teal-300" />
-                <span>Configurações</span>
-              </div>
-              {openGroup === 'configuracoes' ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-            </button>
+        {/* GRUPO 4: CONFIGURAÇÕES (BANCO DE DADOS & USUÁRIOS/CONVITES) */}
+        <div className="space-y-1">
+          <button
+            onClick={() => toggleGroup('configuracoes')}
+            className="w-full flex items-center justify-between px-2 py-1 text-[10px] font-extrabold uppercase tracking-wider text-teal-300/90 hover:text-white transition cursor-pointer"
+          >
+            <div className="flex items-center gap-1.5">
+              <Settings className="w-3.5 h-3.5 text-teal-300" />
+              <span>Configurações</span>
+            </div>
+            {openGroup === 'configuracoes' ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+          </button>
 
-            {openGroup === 'configuracoes' && (
-              <div className="space-y-1 pl-1">
-                {/* Banco de Dados */}
-                <button
-                  onClick={() => setActiveTab('database')}
-                  className={`w-full text-left px-3 py-2 rounded-xl transition cursor-pointer flex items-center justify-between text-xs font-semibold ${
-                    activeTab === 'database'
-                      ? 'bg-[#00897b] text-white shadow-md shadow-teal-950/20 font-bold border-l-4 border-[#00bfa5]'
-                      : 'text-teal-100/90 hover:text-white hover:bg-white/10'
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <Database className={`w-4 h-4 shrink-0 ${activeTab === 'database' ? 'text-[#a7ffeb]' : 'text-teal-300'}`} />
-                    <div className="truncate">
-                      <span className="block truncate">Banco de Dados</span>
-                      <span className="text-[10px] opacity-75 font-normal block truncate">
-                        Backup, Restore & Limpeza
-                      </span>
-                    </div>
+          {openGroup === 'configuracoes' && (
+            <div className="space-y-1 pl-1">
+              {/* Banco de Dados */}
+              <button
+                onClick={() => setActiveTab('database')}
+                className={`w-full text-left px-3 py-2 rounded-xl transition cursor-pointer flex items-center justify-between text-xs font-semibold ${
+                  activeTab === 'database'
+                    ? 'bg-[#00897b] text-white shadow-md shadow-teal-950/20 font-bold border-l-4 border-[#00bfa5]'
+                    : 'text-teal-100/90 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <Database className={`w-4 h-4 shrink-0 ${activeTab === 'database' ? 'text-[#a7ffeb]' : 'text-teal-300'}`} />
+                  <div className="truncate">
+                    <span className="block truncate">Banco de Dados</span>
+                    <span className="text-[10px] opacity-75 font-normal block truncate">
+                      Backup, Restore & Limpeza
+                    </span>
                   </div>
-                  {activeTab === 'database' && <ChevronRight className="w-3.5 h-3.5 text-[#a7ffeb] shrink-0" />}
-                </button>
+                </div>
+                {activeTab === 'database' && <ChevronRight className="w-3.5 h-3.5 text-[#a7ffeb] shrink-0" />}
+              </button>
 
-                {/* Usuários & Convites */}
+              {/* Usuários & Convites */}
+              {isMaster && (
                 <button
                   onClick={() => setActiveTab('admin')}
                   className={`w-full text-left px-3 py-2 rounded-xl transition cursor-pointer flex items-center justify-between text-xs font-semibold ${
@@ -372,10 +372,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   </div>
                   {activeTab === 'admin' && <ChevronRight className="w-3.5 h-3.5 text-[#a7ffeb] shrink-0" />}
                 </button>
-              </div>
-            )}
-          </div>
-        )}
+              )}
+            </div>
+          )}
+        </div>
 
         {/* BOTÃO CENTRAL DE AJUDA & NOVIDADES ABAIXO DE CONFIGURAÇÕES */}
         <div className="pt-2 border-t border-teal-800/40">

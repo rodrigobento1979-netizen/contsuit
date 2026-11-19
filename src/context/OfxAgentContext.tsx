@@ -583,19 +583,6 @@ export const OfxAgentProvider: React.FC<{
     } catch {}
   }, [manualJob]);
 
-  useEffect(() => {
-    setRecentStatements([]);
-    setManualJob((prev) => {
-      if (prev && prev.companyId !== currentCompany?.id) {
-        try {
-          localStorage.removeItem(MANUAL_JOB_STORAGE_KEY);
-        } catch {}
-        return null;
-      }
-      return prev;
-    });
-  }, [currentCompany?.id]);
-
   const setAutoRunEnabled = useCallback((enabled: boolean) => {
     setConfig((prev) => ({
       ...prev,
@@ -1319,11 +1306,6 @@ export const OfxAgentProvider: React.FC<{
                     ...savedDoc,
                     hasOriginalFile: true,
                   }).catch(() => {});
-                  window.dispatchEvent(
-                    new CustomEvent('contsuite:document-saved', {
-                      detail: { ...savedDoc, fileBase64: grp.base64, hasOriginalFile: true },
-                    })
-                  );
                 }
               } catch (e) {
                 console.warn('Falha ao salvar grupo separado em Arquivos:', e);
@@ -1370,11 +1352,6 @@ export const OfxAgentProvider: React.FC<{
                       ...savedExtDoc,
                       hasOriginalFile: true,
                     }).catch(() => {});
-                    window.dispatchEvent(
-                      new CustomEvent('contsuite:document-saved', {
-                        detail: { ...savedExtDoc, fileBase64: extratoGroup.base64, hasOriginalFile: true },
-                      })
-                    );
                   }
                 } catch {}
               }

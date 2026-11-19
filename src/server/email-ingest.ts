@@ -98,52 +98,44 @@ function resolveCompanyForEmail(params: {
 
   const users = getUsers();
   const normSender = params.senderEmail.toLowerCase().trim();
-  const clientCompanies = companies.filter((c) => c.id !== 'comp-master');
-  const masterCompany = companies.find((c) => c.id === 'comp-master');
 
-  // 1. Match by CNPJ found in document AI or email text/subject/filename (client companies first)
+  // 1. Match by sender email in companies.contactEmail
+  const byContact = companies.find(
+    (c) => c.contactEmail && c.contactEmail.toLowerCase().trim() === normSender
+  );
+  if (byContact) return byContact;
+
+  // 2. Match by sender email in users table
+  const matchedUser = users.find(
+    (u) => u.email && u.email.toLowerCase().trim() === normSender
+  );
+  if (matchedUser?.companyId) {
+    const userComp = companies.find((c) => c.id === matchedUser.companyId);
+    if (userComp) return userComp;
+  }
+
+  // 3. Match by CNPJ found in document AI or email text/subject
   const combinedText = `${params.detectedCnpj || ''}\n${params.subject}\n${params.bodyText}\n${params.fileName}`;
   const cnpjMatches = combinedText.match(/\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}/g) || [];
   for (const rawCnpj of cnpjMatches) {
     const digits = rawCnpj.replace(/\D/g, '');
     if (digits.length === 14) {
-      const clientMatch = clientCompanies.find((c) => c.cnpj.replace(/\D/g, '') === digits);
-      if (clientMatch) return clientMatch;
+      const comp = companies.find((c) => c.cnpj.replace(/\D/g, '') === digits);
+      if (comp) return comp;
     }
   }
 
-  // 2. Match by client company fantasyName or name inside subject/body/filename
+  // 4. Match by company fantasyName or name inside subject/body/filename
   const haystack = `${params.subject} ${params.bodyText.slice(0, 1500)} ${params.fileName}`.toLowerCase();
-  for (const comp of clientCompanies) {
+  for (const comp of companies) {
+    if (comp.id === 'comp-master') continue;
     const fantasy = (comp.fantasyName || '').toLowerCase().trim();
     const legal = (comp.name || '').toLowerCase().trim();
-    if (fantasy.length >= 3 && haystack.includes(fantasy)) return comp;
+    if (fantasy.length >= 4 && haystack.includes(fantasy)) return comp;
     if (legal.length >= 5 && haystack.includes(legal)) return comp;
   }
 
-  // 3. Match by sender email on non-master client companies (contactEmail / createdByEmail)
-  const byClientContact = clientCompanies.find(
-    (c) =>
-      (c.contactEmail && c.contactEmail.toLowerCase().trim() === normSender) ||
-      (c.createdByEmail && c.createdByEmail.toLowerCase().trim() === normSender)
-  );
-  if (byClientContact) return byClientContact;
-
-  // 4. Match by non-master user email -> their companyId
-  const matchedClientUser = users.find(
-    (u) =>
-      u.email &&
-      u.email.toLowerCase().trim() === normSender &&
-      u.companyId &&
-      u.companyId !== 'comp-master'
-  );
-  if (matchedClientUser?.companyId) {
-    const userComp = clientCompanies.find((c) => c.id === matchedClientUser.companyId);
-    if (userComp) return userComp;
-  }
-
-  // 5. Fallback to master company only if no client company matched
-  return masterCompany || companies[0];
+  return companies.find((c) => c.id === 'comp-master') || companies[0];
 }
 
 function buildStatementRecordFromExtraction(

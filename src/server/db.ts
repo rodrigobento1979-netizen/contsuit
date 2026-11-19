@@ -325,8 +325,6 @@ export function createCompany(company: Omit<Company, 'id' | 'createdAt'>) {
   const db = loadDb();
   const newCompany: Company = {
     ...company,
-    contactEmail: company.contactEmail ? company.contactEmail.toLowerCase().trim() : '',
-    createdByEmail: company.createdByEmail ? company.createdByEmail.toLowerCase().trim() : undefined,
     adminEmail: company.adminEmail || 'rodrigobento1979@gmail.com',
     adminName: company.adminName || 'Rodrigo Bento',
     id: 'comp-' + Date.now().toString(36),
@@ -341,16 +339,9 @@ export function updateCompany(id: string, updates: Partial<Company>) {
   const db = loadDb();
   const idx = db.companies.findIndex(c => c.id === id);
   if (idx !== -1) {
-    const normalizedUpdates: Partial<Company> = { ...updates };
-    if (typeof normalizedUpdates.contactEmail === 'string') {
-      normalizedUpdates.contactEmail = normalizedUpdates.contactEmail.toLowerCase().trim();
-    }
-    if (typeof normalizedUpdates.createdByEmail === 'string') {
-      normalizedUpdates.createdByEmail = normalizedUpdates.createdByEmail.toLowerCase().trim();
-    }
     db.companies[idx] = {
       ...db.companies[idx],
-      ...normalizedUpdates,
+      ...updates,
       id: db.companies[idx].id,
       createdAt: db.companies[idx].createdAt,
     };
@@ -362,18 +353,13 @@ export function updateCompany(id: string, updates: Partial<Company>) {
 
 export function upsertCompany(company: Partial<Company> & { id: string }) {
   const db = loadDb();
-  const normContact = company.contactEmail ? company.contactEmail.toLowerCase().trim() : undefined;
-  const normCreatedBy = company.createdByEmail ? company.createdByEmail.toLowerCase().trim() : undefined;
   const idx = db.companies.findIndex(c => c.id === company.id);
   if (idx !== -1) {
-    const existing = db.companies[idx];
     db.companies[idx] = {
-      ...existing,
+      ...db.companies[idx],
       ...company,
-      contactEmail: normContact ?? existing.contactEmail,
-      createdByEmail: normCreatedBy ?? existing.createdByEmail,
-      id: existing.id,
-      createdAt: existing.createdAt,
+      id: db.companies[idx].id,
+      createdAt: db.companies[idx].createdAt,
     };
     saveDb(db);
     return db.companies[idx];
@@ -383,7 +369,7 @@ export function upsertCompany(company: Partial<Company> & { id: string }) {
     name: company.name || company.fantasyName || 'Empresa Cadastrada',
     cnpj: company.cnpj || '00.000.000/0001-00',
     fantasyName: company.fantasyName || company.name || 'Empresa',
-    contactEmail: normContact || '',
+    contactEmail: company.contactEmail || '',
     phone: company.phone || '',
     accountingSystem: company.accountingSystem || 'dominio',
     chartOfAccounts: company.chartOfAccounts || {
@@ -394,7 +380,7 @@ export function upsertCompany(company: Partial<Company> & { id: string }) {
     adminEmail: company.adminEmail || 'rodrigobento1979@gmail.com',
     adminName: company.adminName || 'Rodrigo Bento',
     createdByUserId: company.createdByUserId,
-    createdByEmail: normCreatedBy,
+    createdByEmail: company.createdByEmail,
     createdByName: company.createdByName,
     createdAt: company.createdAt || new Date().toISOString(),
   };
@@ -420,7 +406,6 @@ export function createUser(user: Omit<User, 'id' | 'createdAt'>) {
   const db = loadDb();
   const newUser: User = {
     ...user,
-    email: user.email.toLowerCase().trim(),
     id: 'usr-' + Date.now().toString(36),
     createdAt: new Date().toISOString(),
   };
@@ -433,64 +418,11 @@ export function updateUser(id: string, updates: Partial<User>) {
   const db = loadDb();
   const idx = db.users.findIndex(u => u.id === id);
   if (idx !== -1) {
-    const normalizedUpdates: Partial<User> = { ...updates };
-    if (typeof normalizedUpdates.email === 'string') {
-      normalizedUpdates.email = normalizedUpdates.email.toLowerCase().trim();
-    }
-    db.users[idx] = { ...db.users[idx], ...normalizedUpdates };
+    db.users[idx] = { ...db.users[idx], ...updates };
     saveDb(db);
     return db.users[idx];
   }
   return null;
-}
-
-export function upsertUser(user: Partial<User> & { email: string }) {
-  const db = loadDb();
-  const normEmail = user.email.toLowerCase().trim();
-  const isMasterEmail =
-    normEmail === 'rodrigobento1979@gmail.com' || normEmail === 'contsuitesistemas@gmail.com';
-  const idx = db.users.findIndex(
-    u => (user.id && u.id === user.id) || u.email.toLowerCase().trim() === normEmail
-  );
-  if (idx !== -1) {
-    const existing = db.users[idx];
-    const incomingCompId =
-      !isMasterEmail && user.companyId === 'comp-master' ? '' : user.companyId;
-    const resolvedCompanyId =
-      incomingCompId && incomingCompId.trim()
-        ? incomingCompId.trim()
-        : existing.companyId || '';
-    db.users[idx] = {
-      ...existing,
-      ...user,
-      id: existing.id,
-      email: normEmail,
-      name: user.name || existing.name,
-      role: isMasterEmail ? 'admin' : user.role || existing.role || 'client',
-      companyId: resolvedCompanyId,
-      status: user.status || existing.status || 'active',
-      createdAt: existing.createdAt,
-    };
-    saveDb(db);
-    return db.users[idx];
-  }
-  const incomingCompId =
-    !isMasterEmail && user.companyId === 'comp-master' ? '' : user.companyId || '';
-  const created: User = {
-    id: user.id || 'usr-' + Date.now().toString(36),
-    name: user.name || normEmail.split('@')[0],
-    email: normEmail,
-    role: isMasterEmail ? 'admin' : user.role || 'client',
-    companyId: isMasterEmail ? incomingCompId || 'comp-master' : incomingCompId,
-    avatarUrl: user.avatarUrl,
-    createdAt: user.createdAt || new Date().toISOString(),
-    status: user.status || 'active',
-    invitationToken: user.invitationToken,
-    invitedAt: user.invitedAt,
-  };
-  db.users.push(created);
-  saveDb(db);
-  return created;
 }
 
 export function deleteUser(id: string) {
@@ -576,67 +508,6 @@ export function deleteAsset(id: string) {
   return false;
 }
 
-export function upsertAsset(asset: Partial<Asset> & { id: string; companyId: string }) {
-  const db = loadDb();
-  const idx = db.assets.findIndex(a => a.id === asset.id);
-  const now = new Date().toISOString();
-  if (idx !== -1) {
-    const existing = db.assets[idx];
-    const acquisitionValue = asset.acquisitionValue !== undefined ? Number(asset.acquisitionValue) : existing.acquisitionValue;
-    const residualValue = asset.residualValue !== undefined ? Number(asset.residualValue) : existing.residualValue;
-    const annualRate = asset.annualRate !== undefined ? Number(asset.annualRate) : existing.annualRate;
-    db.assets[idx] = {
-      ...existing,
-      ...asset,
-      id: existing.id,
-      companyId: asset.companyId || existing.companyId,
-      acquisitionValue,
-      residualValue,
-      annualRate,
-      depreciableValue: Math.max(0, acquisitionValue - (residualValue || 0)),
-      monthlyRate: (annualRate || 0) / 12,
-      updatedAt: asset.updatedAt || now,
-    };
-    saveDb(db);
-    return db.assets[idx];
-  }
-  const acq = Number(asset.acquisitionValue || 0);
-  const resVal = Number(asset.residualValue || 0);
-  const annRate = Number(asset.annualRate || 10);
-  const created: Asset = {
-    id: asset.id,
-    companyId: asset.companyId,
-    tagNumber: asset.tagNumber || `PAT-${Math.floor(1000 + Math.random() * 9000)}`,
-    description: asset.description || 'Bem Imobilizado',
-    category: asset.category || 'outro',
-    categoryLabel: asset.categoryLabel || 'Diversos',
-    acquisitionDate: asset.acquisitionDate || now.slice(0, 10),
-    depreciationStartDate: asset.depreciationStartDate || asset.acquisitionDate || now.slice(0, 10),
-    acquisitionValue: acq,
-    residualValue: resVal,
-    depreciableValue: Math.max(0, acq - resVal),
-    annualRate: annRate,
-    usefulLifeMonths: Number(asset.usefulLifeMonths || 120),
-    monthlyRate: annRate / 12,
-    costCenter: asset.costCenter || 'Administrativo',
-    location: asset.location || 'Sede Principal',
-    supplier: asset.supplier || '',
-    invoiceNumber: asset.invoiceNumber || '',
-    debitAccount: asset.debitAccount || '3.1.2.04.0010',
-    creditAccount: asset.creditAccount || '1.2.3.09.0001',
-    assetAccount: asset.assetAccount || '1.2.3.01.0001',
-    status: asset.status || 'ativo',
-    disposalDate: asset.disposalDate,
-    disposalReason: asset.disposalReason,
-    notes: asset.notes || '',
-    createdAt: asset.createdAt || now,
-    updatedAt: asset.updatedAt || now,
-  };
-  db.assets.push(created);
-  saveDb(db);
-  return created;
-}
-
 export function getStatements(companyId?: string) {
   const db = loadDb();
   if (companyId && companyId !== 'all') {
@@ -657,57 +528,6 @@ export function saveStatement(stmt: Omit<ConvertedStatement, 'id' | 'uploadedAt'
   return newStmt;
 }
 
-export function upsertStatement(stmt: Partial<ConvertedStatement> & { id: string; companyId: string }) {
-  const db = loadDb();
-  const idx = db.statements.findIndex(s => s.id === stmt.id);
-  if (idx !== -1) {
-    const existing = db.statements[idx];
-    db.statements[idx] = {
-      ...existing,
-      ...stmt,
-      id: existing.id,
-      companyId: stmt.companyId || existing.companyId,
-      fileBase64: stmt.fileBase64 !== undefined ? stmt.fileBase64 : existing.fileBase64,
-      transactions:
-        Array.isArray(stmt.transactions) && stmt.transactions.length > 0
-          ? stmt.transactions
-          : existing.transactions,
-      ofxContent: stmt.ofxContent || existing.ofxContent,
-    };
-    saveDb(db);
-    return db.statements[idx];
-  }
-  const created: ConvertedStatement = {
-    id: stmt.id,
-    companyId: stmt.companyId,
-    uploadedAt: stmt.uploadedAt || new Date().toISOString(),
-    originalFileName: stmt.originalFileName || 'extrato.pdf',
-    bankName: stmt.bankName || 'Banco',
-    bankCode: stmt.bankCode || '000',
-    agency: stmt.agency || '',
-    accountNumber: stmt.accountNumber || '',
-    accountType: stmt.accountType || 'CHECKING',
-    startDate: stmt.startDate || '',
-    endDate: stmt.endDate || '',
-    openingBalance: Number(stmt.openingBalance || 0),
-    closingBalance: Number(stmt.closingBalance || 0),
-    totalDebits: Number(stmt.totalDebits || 0),
-    totalCredits: Number(stmt.totalCredits || 0),
-    transactionsCount: Number(stmt.transactionsCount || (stmt.transactions?.length ?? 0)),
-    transactions: Array.isArray(stmt.transactions) ? stmt.transactions : [],
-    ofxContent: stmt.ofxContent || '',
-    fileBase64: stmt.fileBase64,
-    fileMimeType: stmt.fileMimeType,
-    hasOriginalFile: stmt.hasOriginalFile,
-    totalPages: stmt.totalPages,
-    pagesProcessed: stmt.pagesProcessed,
-    sourceDocId: stmt.sourceDocId,
-  };
-  db.statements.unshift(created);
-  saveDb(db);
-  return created;
-}
-
 export function getStatementById(id: string) {
   return loadDb().statements.find(s => s.id === id);
 }
@@ -726,12 +546,8 @@ export function deleteStatement(id: string) {
 // ---------------------------------------------------------
 // HONORÁRIOS CONTÁBEIS (FINANCIAL FEE MANAGEMENT)
 // ---------------------------------------------------------
-export function getFees(companyId?: string, allowedCompanyIds?: string[]) {
+export function getFees(companyId?: string) {
   const db = loadDb();
-  if (Array.isArray(allowedCompanyIds)) {
-    const allowedSet = new Set(allowedCompanyIds);
-    return db.fees.filter(f => allowedSet.has(f.companyId));
-  }
   if (companyId && companyId !== 'all') {
     return db.fees.filter(f => f.companyId === companyId);
   }
@@ -1084,62 +900,6 @@ export function updateDocument(id: string, updates: Partial<CompanyDocument>) {
     return db.documents[idx];
   }
   return null;
-}
-
-export function upsertDocument(doc: Partial<CompanyDocument> & { id: string; companyId: string }) {
-  const db = loadDb();
-  if (!db.documents) db.documents = [];
-  const now = new Date().toISOString();
-  const idx = db.documents.findIndex(d => d.id === doc.id);
-  if (idx !== -1) {
-    const existing = db.documents[idx];
-    db.documents[idx] = {
-      ...existing,
-      ...doc,
-      id: existing.id,
-      companyId: doc.companyId || existing.companyId,
-      fileBase64: doc.fileBase64 !== undefined ? doc.fileBase64 : existing.fileBase64,
-      hasOriginalFile: Boolean(
-        doc.fileBase64 !== undefined
-          ? doc.fileBase64
-          : existing.fileBase64 || doc.hasOriginalFile || existing.hasOriginalFile
-      ),
-      updatedAt: doc.updatedAt || existing.updatedAt || now,
-    };
-    saveDb(db);
-    return db.documents[idx];
-  }
-  const newDoc: CompanyDocument = {
-    id: doc.id,
-    companyId: doc.companyId,
-    fileName: doc.fileName || 'documento.pdf',
-    mimeType: doc.mimeType || 'application/pdf',
-    fileSize: Number(doc.fileSize || 0),
-    category: doc.category || 'outro',
-    status: doc.status || 'pendente',
-    competenceMonth: doc.competenceMonth || now.slice(0, 7),
-    documentDate: doc.documentDate,
-    issuerOrBank: doc.issuerOrBank,
-    documentNumber: doc.documentNumber,
-    amount: doc.amount,
-    detectedCnpj: doc.detectedCnpj,
-    summary: doc.summary,
-    aiClassified: Boolean(doc.aiClassified),
-    confidence: doc.confidence,
-    notes: doc.notes,
-    uploadedBy: doc.uploadedBy,
-    uploadedAt: doc.uploadedAt || now,
-    updatedAt: doc.updatedAt || now,
-    fileBase64: doc.fileBase64,
-    hasOriginalFile: Boolean(doc.fileBase64 || doc.hasOriginalFile),
-    ofxStatus: doc.ofxStatus,
-    ofxStatementId: doc.ofxStatementId,
-    ofxError: doc.ofxError,
-    sourceGroupLabel: doc.sourceGroupLabel,
-  };
-  db.documents.unshift(newDoc);
-  saveDb(db);
-  return newDoc;
 }
 
 export function deleteDocument(id: string) {
