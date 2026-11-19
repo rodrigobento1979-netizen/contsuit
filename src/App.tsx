@@ -35,6 +35,7 @@ import {
   fetchStatementsFromFirestore,
   deleteStatementFromFirestore,
   fetchDocumentsFromFirestore,
+  fetchDocumentBinaryFromFirestore,
   syncUserToFirestore,
   fetchUsersFromFirestore,
   deleteUserFromFirestore
@@ -372,22 +373,46 @@ export default function App() {
       }
 
       // Mirror subcollections from Firestore -> API once per Master session when Firestore is populated
-      if (masterMirrorSyncedRef.current !== normCurrentEmail && firestoreCompanies.length > 0) {
-        masterMirrorSyncedRef.current = normCurrentEmail;
+      const syncKey = `${normCurrentEmail}:${mergedComps.length}`;
+      if (masterMirrorSyncedRef.current !== syncKey && firestoreCompanies.length > 0) {
+        masterMirrorSyncedRef.current = syncKey;
         Promise.all(
           mergedComps.map(async (comp) => {
             try {
-              const [fDocs, fAssets, fStmts] = await Promise.all([
+              const [fDocs, fAssets, fStmts, existingApiRes] = await Promise.all([
                 fetchDocumentsFromFirestore(comp.id).catch(() => []),
                 fetchAssetsFromFirestore(comp.id).catch(() => []),
                 fetchStatementsFromFirestore(comp.id).catch(() => []),
+                fetch(`/api/documents?companyId=${encodeURIComponent(comp.id)}&email=${encodeURIComponent(normCurrentEmail)}`, { cache: 'no-store' }).catch(() => null),
               ]);
-              if (fDocs.length > 0 || fAssets.length > 0 || fStmts.length > 0) {
+              let apiDocList: CompanyDocument[] = [];
+              if (existingApiRes && existingApiRes.ok) {
+                apiDocList = (await safeJson<CompanyDocument[]>(existingApiRes)) || [];
+              }
+              const apiDocMap = new Map(apiDocList.map(d => [d.id, d]));
+
+              // Hydrate missing PDF/image binaries from Firestore chunks for docs not yet backed in db.json
+              const hydratedDocs = await Promise.all(
+                fDocs.map(async (d) => {
+                  const apiMatch = apiDocMap.get(d.id);
+                  if ((!apiMatch || !apiMatch.hasOriginalFile) && d.hasOriginalFile) {
+                    try {
+                      const b64 = await fetchDocumentBinaryFromFirestore(comp.id, d.id);
+                      if (b64 && b64.length <= 3_300_000) {
+                        return { ...d, fileBase64: b64, hasOriginalFile: true };
+                      }
+                    } catch {}
+                  }
+                  return d;
+                })
+              );
+
+              if (hydratedDocs.length > 0 || fAssets.length > 0 || fStmts.length > 0) {
                 await fetch('/api/database/sync-mirror', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
-                    documents: fDocs,
+                    documents: hydratedDocs,
                     assets: fAssets,
                     statements: fStmts,
                   }),
@@ -705,9 +730,9 @@ export default function App() {
           isAuthenticatedRef.current &&
           currentUserEmailRef.current?.toLowerCase().trim() === normEmail;
 
-        // If user explicitly logged in via Email/Company (e.g. SSCONT), do not overwrite with another Google session
+        // If user explicitly logged in via Email/Company or simulated profile, do not overwrite with another Google session
         if (
-          authMode === 'email' &&
+          (authMode === 'email' || authMode === 'simulated') &&
           isAuthenticatedRef.current &&
           currentUserEmailRef.current &&
           currentUserEmailRef.current.toLowerCase().trim() !== normEmail
@@ -853,7 +878,7 @@ export default function App() {
     masterMirrorSyncedRef.current = null;
     localStorage.setItem('contsuite_auth_mode', 'email');
     if (firebaseUser?.email && firebaseUser.email.toLowerCase().trim() !== normInput) {
-      logoutFirebase().catch(() => {});
+      await logoutFirebase().catch(() => {});
     }
 
     // 1. Try backend authentication (supports email, username, or company name like SSCONT)
@@ -1091,7 +1116,21 @@ export default function App() {
     setDepreciationSummary(null);
     setCurrentUser(user);
 
-    const allowedCompanies = filterCompaniesForUser(allCompanies, user);
+    let baseCompaniesPool = allCompanies;
+    if (isNextMaster) {
+      try {
+        const cached = localStorage.getItem('contsuite_cached_companies');
+        if (cached) {
+          const parsed = JSON.parse(cached) as Company[];
+          if (Array.isArray(parsed) && parsed.length > baseCompaniesPool.length) {
+            baseCompaniesPool = parsed;
+            setAllCompanies(parsed);
+          }
+        }
+      } catch {}
+    }
+
+    const allowedCompanies = filterCompaniesForUser(baseCompaniesPool, user);
     if (!isNextMaster) {
       setAllCompanies(allowedCompanies);
     }
@@ -1104,6 +1143,12 @@ export default function App() {
     setCurrentCompany(company);
     if (!isNextMaster && (activeTab === 'admin' || activeTab === 'database')) {
       setActiveTab('home');
+    }
+
+    if (isNextMaster && firebaseUser?.email?.toLowerCase().trim() === (user.email || '').toLowerCase().trim()) {
+      localStorage.setItem('contsuite_auth_mode', 'google');
+    } else {
+      localStorage.setItem('contsuite_auth_mode', 'simulated');
     }
 
     localStorage.setItem(SESSION_USER_KEY, JSON.stringify(user));

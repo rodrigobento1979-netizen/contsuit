@@ -443,5 +443,53 @@ export function subscribeDocumentsFromFirestore(
   );
 }
 
+export async function fetchAllCompaniesDocumentsFromFirestore(
+  companyIds: string[]
+): Promise<CompanyDocument[]> {
+  if (!auth.currentUser || !Array.isArray(companyIds) || companyIds.length === 0) return [];
+  const results = await Promise.all(
+    companyIds
+      .filter((id) => Boolean(id && id.trim()))
+      .map((id) => fetchDocumentsFromFirestore(id).catch(() => [] as CompanyDocument[]))
+  );
+  return results.flat();
+}
 
+export async function moveDocumentInFirestore(
+  fromCompanyId: string,
+  toCompanyId: string,
+  documentData: CompanyDocument
+): Promise<void> {
+  if (!auth.currentUser || !fromCompanyId || !toCompanyId || !documentData?.id) return;
+  if (fromCompanyId === toCompanyId) return;
 
+  let b64 = documentData.fileBase64;
+  if (!b64) {
+    try {
+      const fetched = await fetchDocumentBinaryFromFirestore(fromCompanyId, documentData.id);
+      if (fetched) b64 = fetched;
+    } catch {}
+  }
+
+  const movedDoc: CompanyDocument = {
+    ...documentData,
+    companyId: toCompanyId,
+    fileBase64: b64,
+    hasOriginalFile: Boolean(b64 || documentData.hasOriginalFile),
+    updatedAt: new Date().toISOString(),
+  };
+
+  await saveDocumentToFirestore(toCompanyId, movedDoc);
+
+  // Clean up old chunks & document metadata in the source company
+  try {
+    const oldChunksSnap = await getDocs(
+      collection(db, 'companies', fromCompanyId, 'documents', documentData.id, 'chunks')
+    );
+    for (const chunkDoc of oldChunksSnap.docs) {
+      await deleteDoc(chunkDoc.ref).catch(() => {});
+    }
+  } catch {}
+
+  await deleteDocumentFromFirestore(fromCompanyId, documentData.id);
+}

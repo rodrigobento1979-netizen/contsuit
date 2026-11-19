@@ -1667,8 +1667,37 @@ apiRouter.post('/database/sync-mirror', (req: Request, res: Response) => {
 // ---------------------------------------------------------
 apiRouter.get('/documents', (req: Request, res: Response) => {
   try {
-    const { companyId } = req.query;
-    const list = getDocuments(companyId as string).map(({ fileBase64, ...rest }) => ({
+    const { companyId, email } = req.query;
+    const normEmail = typeof email === 'string' ? email.toLowerCase().trim() : '';
+    const isMaster = isMasterEmailServer(normEmail);
+    const reqCompId = typeof companyId === 'string' ? companyId.trim() : '';
+
+    let docs: ReturnType<typeof getDocuments> = [];
+    if (!reqCompId || reqCompId === 'all') {
+      if (isMaster) {
+        docs = getDocuments('all');
+      } else if (normEmail) {
+        const user = getUserByEmail(normEmail);
+        const allowedIds = new Set(
+          getCompaniesForUserServer({
+            id: user?.id,
+            email: normEmail,
+            companyId: user?.companyId,
+          }).map((c) => c.id)
+        );
+        docs = getDocuments('all').filter((d) => allowedIds.has(d.companyId));
+      } else {
+        docs = [];
+      }
+    } else {
+      if (reqCompId === 'comp-master' && normEmail && !isMaster) {
+        docs = [];
+      } else {
+        docs = getDocuments(reqCompId);
+      }
+    }
+
+    const list = docs.map(({ fileBase64, ...rest }) => ({
       ...rest,
       hasOriginalFile: Boolean(fileBase64),
     }));
@@ -1890,6 +1919,7 @@ apiRouter.put('/documents/:id', (req: Request, res: Response) => {
     const { id } = req.params;
     const allowedUpdates: Record<string, any> = {};
     const fields = [
+      'companyId',
       'category',
       'status',
       'competenceMonth',
