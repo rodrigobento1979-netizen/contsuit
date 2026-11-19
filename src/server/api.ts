@@ -773,14 +773,14 @@ apiRouter.post('/email/sync-inbox', async (req: Request, res: Response) => {
 // ---------------------------------------------------------
 apiRouter.get('/companies', (req: Request, res: Response) => {
   try {
-    const { companyId, role, userId, email } = req.query;
+    const { companyId, userId, email } = req.query;
     const all = getCompanies();
     const normEmail = typeof email === 'string' ? email.toLowerCase().trim() : '';
     const isMaster = normEmail === 'rodrigobento1979@gmail.com' || normEmail === 'contsuitesistemas@gmail.com';
-    // Strict isolation for client users only: admin/accountant/Master Admin always receive ALL companies
-    if (!isMaster && role === 'client' && companyId) {
+    // Strict isolation: only Master Admin receives ALL companies; every other user sees only their own company or companies they registered
+    if (!isMaster) {
       const filtered = all.filter(c =>
-        c.id === companyId ||
+        (companyId && c.id === companyId) ||
         (userId && c.createdByUserId === userId) ||
         (normEmail && c.createdByEmail?.toLowerCase().trim() === normEmail)
       );

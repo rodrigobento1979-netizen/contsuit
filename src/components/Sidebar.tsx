@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { User, Company } from '../types';
 import { ContSuiteLogo } from './ContSuiteLogo';
+import { isMasterUser } from '../utils/auth';
 
 export type AppNavTab = 'home' | 'assets' | 'companies' | 'accounts' | 'ofx' | 'documents' | 'fees' | 'database' | 'admin' | 'depreciation';
 
@@ -50,7 +51,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenScanner,
   onLogout,
 }) => {
-  const isAdmin = currentUser.role === 'admin';
+  const isMaster = isMasterUser(currentUser);
 
   // Accordion state: todas as seções iniciam fechadas e abrir uma recolhe as demais
   type SidebarGroup = 'cadastros' | 'patrimonio' | 'ferramentas' | 'configuracoes';
@@ -351,7 +352,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </button>
 
               {/* Usuários & Convites */}
-              {isAdmin && (
+              {isMaster && (
                 <button
                   onClick={() => setActiveTab('admin')}
                   className={`w-full text-left px-3 py-2 rounded-xl transition cursor-pointer flex items-center justify-between text-xs font-semibold ${
@@ -416,7 +417,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 {currentUser.name.split(' ')[0]}
               </p>
               <p className="text-[10px] text-teal-300 truncate">
-                {isAdmin ? 'Admin Master' : 'Cliente'}
+                {isMaster ? 'Admin Master' : currentUser.role === 'accountant' ? 'Contador' : 'Cliente'}
               </p>
             </div>
           </div>

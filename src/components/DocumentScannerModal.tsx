@@ -3,15 +3,14 @@ import {
   X,
   Camera,
   Upload,
-  FileText,
   Trash2,
-  Sparkles,
   Loader2,
-  CheckCircle2,
-  RefreshCw,
   Building2,
   AlertCircle,
   Scan,
+  Lock,
+  Send,
+  Plus,
 } from 'lucide-react';
 import { PDFDocument } from 'pdf-lib';
 import { Company, CompanyDocument, User } from '../types';
@@ -23,8 +22,6 @@ interface DocumentScannerModalProps {
   onClose: () => void;
   currentUser: User;
   currentCompany: Company;
-  allCompanies: Company[];
-  onSelectCompany: (companyId: string) => void;
   showToast: (text: string, type?: 'success' | 'error') => void;
   onDocumentSaved: (doc: CompanyDocument) => void;
 }
@@ -34,26 +31,34 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
   onClose,
   currentUser,
   currentCompany,
-  allCompanies,
-  onSelectCompany,
   showToast,
   onDocumentSaved,
 }) => {
   const [capturedImages, setCapturedImages] = useState<string[]>([]);
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [targetCompanyId, setTargetCompanyId] = useState(currentCompany.id);
   const [documentTitle, setDocumentTitle] = useState('');
   const [cameraError, setCameraError] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setIsCameraActive(false);
+  };
 
   useEffect(() => {
     if (isOpen) {
       setCapturedImages([]);
-      setTargetCompanyId(currentCompany.id);
       setDocumentTitle(`Documento Digitalizado - ${new Date().toLocaleDateString('pt-BR')}`);
       setCameraError(null);
       setIsCameraActive(false);
@@ -63,34 +68,36 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
     return () => {
       stopCamera();
     };
-  }, [isOpen, currentCompany.id]);
+  }, [isOpen]);
+
+  // Attach active MediaStream once the <video> element mounts
+  useEffect(() => {
+    if (isCameraActive && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+      videoRef.current.play().catch(() => {});
+    }
+  }, [isCameraActive]);
 
   const startCamera = async () => {
     setCameraError(null);
-    setIsCameraActive(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
         audio: false,
       });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play().catch(() => {});
-      }
+      streamRef.current = stream;
+      setIsCameraActive(true);
     } catch (err: any) {
       console.warn('Could not start camera:', err);
-      setCameraError('Câmera não disponível ou permissão negada. Utilize a opção de enviar imagem/foto do dispositivo.');
+      setCameraError(
+        'Câmera não disponível ou permissão negada. Utilize a opção de enviar imagem do dispositivo.'
+      );
       setIsCameraActive(false);
     }
-  };
-
-  const stopCamera = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach((track) => track.stop());
-      videoRef.current.srcObject = null;
-    }
-    setIsCameraActive(false);
   };
 
   const captureSnapshot = () => {
@@ -102,9 +109,11 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
     setCapturedImages((prev) => [...prev, dataUrl]);
-    showToast(`Página ${capturedImages.length + 1} capturada com sucesso!`);
+    // Pause/close camera so the mobile user immediately sees the photo preview with Enviar & Cancelar
+    stopCamera();
+    showToast(`Foto capturada! Confira e clique em Enviar ou Cancelar.`);
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -125,6 +134,11 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
 
   const removePage = (index: number) => {
     setCapturedImages((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleCancelCaptured = () => {
+    stopCamera();
+    setCapturedImages([]);
   };
 
   const handleGeneratePdfAndSave = async () => {
@@ -164,13 +178,14 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
           .join('')
       );
 
-      const activeComp = allCompanies.find((c) => c.id === targetCompanyId) || currentCompany;
+      // Strictly bound ONLY to the logged-in / active company
+      const lockedCompany = currentCompany;
       const docId = 'doc-scan-' + Date.now().toString(36);
       const fileName = `${documentTitle.trim() || 'Documento_Digitalizado'}.pdf`;
 
       const newDoc: CompanyDocument = {
         id: docId,
-        companyId: activeComp.id,
+        companyId: lockedCompany.id,
         fileName,
         mimeType: 'application/pdf',
         fileSize: pdfBytes.length,
@@ -178,11 +193,11 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
         status: 'pendente',
         competenceMonth: new Date().toISOString().slice(0, 7),
         documentDate: new Date().toISOString().slice(0, 10),
-        issuerOrBank: activeComp.fantasyName || activeComp.name,
-        summary: `Documento digitalizado por ${currentUser.name} para a empresa ${activeComp.fantasyName || activeComp.name}`,
+        issuerOrBank: (lockedCompany.fantasyName || lockedCompany.name).slice(0, 120),
+        summary: `Documento digitalizado por ${currentUser.name} para ${lockedCompany.fantasyName || lockedCompany.name}`.slice(0, 250),
         aiClassified: true,
         confidence: 95,
-        uploadedBy: currentUser.name,
+        uploadedBy: currentUser.name.slice(0, 150),
         uploadedAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         fileBase64: base64Pdf,
@@ -199,7 +214,7 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
 
       // Save to Firestore & backend API
       try {
-        await saveDocumentToFirestore(activeComp.id, newDoc);
+        await saveDocumentToFirestore(lockedCompany.id, newDoc);
       } catch (fErr) {
         console.warn('Firestore save scanned doc warning:', fErr);
       }
@@ -216,7 +231,7 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
 
       stopCamera();
       onDocumentSaved(newDoc);
-      showToast(`Documento "${fileName}" digitalizado e salvo com sucesso!`);
+      showToast(`Documento "${fileName}" enviado e vinculado à ${lockedCompany.fantasyName || lockedCompany.name}!`);
       onClose();
     } catch (err: any) {
       console.error('Error generating PDF from scanned images:', err);
@@ -228,64 +243,82 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
 
   if (!isOpen) return null;
 
+  const latestImage = capturedImages.length > 0 ? capturedImages[capturedImages.length - 1] : null;
+
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 space-y-5 animate-in fade-in zoom-in-95">
-        {/* Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-teal-50 text-teal-700 border border-teal-200 flex items-center justify-center">
-              <Scan className="w-5 h-5 text-[#00897b]" />
+    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div className="bg-white w-full h-[100dvh] sm:h-auto sm:max-h-[92vh] sm:max-w-xl sm:rounded-3xl shadow-2xl border-0 sm:border sm:border-slate-200 flex flex-col overflow-hidden animate-in fade-in zoom-in-95">
+        
+        {/* Compact Sticky Header */}
+        <div className="px-4 py-3 sm:px-6 sm:py-4 bg-gradient-to-r from-[#00695c] to-[#00897b] text-white flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-white/15 border border-white/20 flex items-center justify-center shrink-0">
+              <Scan className="w-5 h-5 text-[#a7ffeb]" />
             </div>
-            <div>
-              <h3 className="font-extrabold text-slate-900 text-base">Digitalizar Documento (Câmera / Scanner)</h3>
-              <p className="text-xs text-slate-500">Capture fotos de notas, recibos ou extratos e converta em PDF automaticamente</p>
+            <div className="min-w-0">
+              <h3 className="font-extrabold text-sm sm:text-base leading-tight truncate">
+                Digitalizar Documento
+              </h3>
+              <p className="text-[11px] text-teal-100 truncate">
+                Câmera para PDF • Uso Rápido no Celular
+              </p>
             </div>
           </div>
           <button
+            type="button"
             onClick={() => {
               stopCamera();
               onClose();
             }}
-            className="text-slate-400 hover:text-slate-600 p-1.5 rounded-full hover:bg-slate-100 cursor-pointer"
+            aria-label="Fechar digitalização"
+            className="text-white/80 hover:text-white p-2 rounded-full hover:bg-white/15 cursor-pointer shrink-0"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Target Company Selector */}
-        <div className="p-3.5 rounded-2xl bg-teal-50/70 border border-teal-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-2">
+        {/* Locked Company Banner (NEVER allows switching company) */}
+        <div className="px-4 py-2 sm:px-6 bg-teal-50/90 border-b border-teal-200/80 flex items-center justify-between gap-2 text-xs shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
             <Building2 className="w-4 h-4 text-teal-700 shrink-0" />
-            <span className="font-bold text-teal-950">Vincular à Empresa:</span>
+            <div className="min-w-0 truncate">
+              <span className="font-semibold text-teal-800 mr-1">Empresa:</span>
+              <span className="font-extrabold text-slate-900">
+                {currentCompany.fantasyName || currentCompany.name}
+              </span>
+              <span className="hidden sm:inline text-slate-500 font-mono text-[11px] ml-1.5">
+                ({currentCompany.cnpj})
+              </span>
+            </div>
           </div>
-          <select
-            value={targetCompanyId}
-            onChange={(e) => setTargetCompanyId(e.target.value)}
-            className="bg-white text-slate-900 font-bold border border-teal-300 rounded-xl px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-teal-500 cursor-pointer"
+          <span
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-100 text-teal-800 font-bold text-[10px] shrink-0"
+            title="Sempre vinculado automaticamente à empresa logada"
           >
-            {allCompanies.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.fantasyName || c.name} (CNPJ: {c.cnpj})
-              </option>
-            ))}
-          </select>
+            <Lock className="w-3 h-3" />
+            Fixa
+          </span>
         </div>
 
-        {/* Document Title Input */}
-        <div>
-          <label className="block text-xs font-semibold text-slate-700 mb-1">Título do Documento Digitalizado</label>
-          <input
-            type="text"
-            value={documentTitle}
-            onChange={(e) => setDocumentTitle(e.target.value)}
-            placeholder="Ex: Recibo Pagamento Fornecedor - Novembro"
-            className="w-full p-2.5 rounded-xl border border-slate-300 text-xs focus:outline-none focus:ring-2 focus:ring-teal-500"
-          />
-        </div>
+        {/* Main Scrollable Body */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+          
+          {/* Document Title (Visible on main screen & review) */}
+          {!isCameraActive && (
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Título do Documento
+              </label>
+              <input
+                type="text"
+                value={documentTitle}
+                onChange={(e) => setDocumentTitle(e.target.value)}
+                placeholder="Ex: Nota Fiscal / Recibo"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-sm sm:text-xs font-medium focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white"
+              />
+            </div>
+          )}
 
-        {/* Camera / Capture Viewport */}
-        <div className="space-y-3">
           {cameraError && (
             <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-center gap-2">
               <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
@@ -293,120 +326,224 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
             </div>
           )}
 
-          {isCameraActive ? (
-            <div className="relative rounded-2xl overflow-hidden bg-slate-950 aspect-video flex items-center justify-center border border-slate-800 shadow-inner">
-              <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-              <div className="absolute bottom-4 inset-x-0 flex items-center justify-center gap-3">
-                <button
-                  type="button"
-                  onClick={captureSnapshot}
-                  className="px-6 py-3 rounded-2xl bg-[#00897b] hover:bg-[#00695c] text-white font-extrabold text-xs shadow-xl flex items-center gap-2 cursor-pointer transition transform active:scale-95 border border-teal-300/40"
-                >
-                  <Camera className="w-4 h-4" />
-                  <span>Capturar Página</span>
-                </button>
+          {/* MODE 1: CAMERA OPEN WITH PAGE FRAMING GUIDE LINE */}
+          {isCameraActive && (
+            <div className="space-y-3">
+              <div className="relative rounded-2xl overflow-hidden bg-black aspect-[3/4] sm:aspect-video w-full max-h-[62dvh] flex items-center justify-center border border-slate-800 shadow-inner">
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full h-full object-cover"
+                />
+
+                {/* Page Framing Line Overlay */}
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-5 sm:p-8">
+                  <div className="relative w-full h-full border-2 border-dashed border-emerald-400/95 rounded-xl shadow-[0_0_0_9999px_rgba(0,0,0,0.42)] flex flex-col items-center justify-between py-2">
+                    {/* Corner brackets for document alignment */}
+                    <span className="absolute -top-0.5 -left-0.5 w-6 h-6 border-t-4 border-l-4 border-emerald-400 rounded-tl-lg" />
+                    <span className="absolute -top-0.5 -right-0.5 w-6 h-6 border-t-4 border-r-4 border-emerald-400 rounded-tr-lg" />
+                    <span className="absolute -bottom-0.5 -left-0.5 w-6 h-6 border-b-4 border-l-4 border-emerald-400 rounded-bl-lg" />
+                    <span className="absolute -bottom-0.5 -right-0.5 w-6 h-6 border-b-4 border-r-4 border-emerald-400 rounded-br-lg" />
+
+                    <span className="px-2.5 py-1 rounded-full bg-black/70 text-emerald-300 text-[11px] font-bold tracking-wide border border-emerald-400/40">
+                      Enquadre a página dentro da linha
+                    </span>
+
+                    {/* Subtle center alignment crosshair */}
+                    <div className="w-full border-t border-emerald-300/25" />
+
+                    <span className="text-[10px] text-white/80 bg-black/50 px-2 py-0.5 rounded">
+                      Mantenha o documento firme e legível
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Camera Action Buttons */}
+              <div className="grid grid-cols-2 gap-3">
                 <button
                   type="button"
                   onClick={stopCamera}
-                  className="px-4 py-3 rounded-2xl bg-slate-800/80 hover:bg-slate-700 text-white font-bold text-xs cursor-pointer transition backdrop-blur-xs"
+                  className="py-3.5 px-4 rounded-2xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-sm sm:text-xs flex items-center justify-center gap-2 cursor-pointer transition"
                 >
-                  Fechar Câmera
+                  <X className="w-4 h-4" />
+                  <span>Cancelar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={captureSnapshot}
+                  className="py-3.5 px-4 rounded-2xl bg-[#00897b] hover:bg-[#00695c] text-white font-extrabold text-sm sm:text-xs shadow-lg flex items-center justify-center gap-2 cursor-pointer transition active:scale-95"
+                >
+                  <Camera className="w-4 h-4" />
+                  <span>Tirar Foto</span>
                 </button>
               </div>
             </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={startCamera}
-                className="p-5 rounded-2xl border-2 border-dashed border-teal-400 bg-teal-50/50 hover:bg-teal-50 text-teal-900 transition flex flex-col items-center justify-center gap-2 cursor-pointer group"
-              >
-                <div className="w-12 h-12 rounded-2xl bg-teal-600 text-white flex items-center justify-center shadow-md group-hover:scale-105 transition">
-                  <Camera className="w-6 h-6" />
-                </div>
-                <span className="font-extrabold text-xs">Abrir Câmera do Dispositivo</span>
-                <span className="text-[10px] text-teal-700 font-medium">Webcam ou Câmera Celular</span>
-              </button>
+          )}
 
-              <label className="p-5 rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-700 transition flex flex-col items-center justify-center gap-2 cursor-pointer group">
-                <div className="w-12 h-12 rounded-2xl bg-slate-800 text-white flex items-center justify-center shadow-md group-hover:scale-105 transition">
-                  <Upload className="w-6 h-6" />
+          {/* MODE 2: TWO MOBILE-OPTIMIZED MENUS (When camera is closed and no captured image yet) */}
+          {!isCameraActive && capturedImages.length === 0 && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={startCamera}
+                  className="p-4 sm:p-5 rounded-2xl border-2 border-dashed border-teal-400 bg-teal-50/60 hover:bg-teal-50 active:scale-[0.98] text-teal-900 transition flex flex-col items-center justify-center gap-2 cursor-pointer text-center min-h-[140px]"
+                >
+                  <div className="w-12 h-12 rounded-2xl bg-[#00897b] text-white flex items-center justify-center shadow-md">
+                    <Camera className="w-6 h-6" />
+                  </div>
+                  <span className="font-extrabold text-xs sm:text-sm leading-tight">
+                    Abrir Câmera
+                  </span>
+                  <span className="text-[11px] text-teal-700 font-medium leading-tight">
+                    Tirar foto da página
+                  </span>
+                </button>
+
+                <label className="p-4 sm:p-5 rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 hover:bg-slate-100 active:scale-[0.98] text-slate-800 transition flex flex-col items-center justify-center gap-2 cursor-pointer text-center min-h-[140px]">
+                  <div className="w-12 h-12 rounded-2xl bg-slate-800 text-white flex items-center justify-center shadow-md">
+                    <Upload className="w-6 h-6" />
+                  </div>
+                  <span className="font-extrabold text-xs sm:text-sm leading-tight">
+                    Enviar Foto
+                  </span>
+                  <span className="text-[11px] text-slate-500 font-medium leading-tight">
+                    Galeria / Arquivo
+                  </span>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+
+              <div className="flex justify-end pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    stopCamera();
+                    onClose();
+                  }}
+                  className="w-full sm:w-auto px-5 py-3 sm:py-2.5 rounded-xl border border-slate-300 text-slate-700 font-bold hover:bg-slate-50 text-xs cursor-pointer"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* MODE 3: CAPTURED PHOTO PREVIEW WITH PROMINENT ENVIAR & CANCELAR BUTTONS */}
+          {!isCameraActive && capturedImages.length > 0 && (
+            <div className="space-y-3.5 animate-in fade-in duration-150">
+              {/* Main captured photo preview */}
+              {latestImage && (
+                <div className="relative rounded-2xl overflow-hidden border border-slate-300 bg-slate-950 aspect-[3/4] sm:aspect-[4/3] max-h-[44dvh] flex items-center justify-center">
+                  <img
+                    src={latestImage}
+                    alt="Foto capturada"
+                    className="w-full h-full object-contain"
+                  />
+                  <div className="absolute top-2.5 left-2.5 px-2.5 py-1 rounded-full bg-black/75 text-white text-[11px] font-bold">
+                    Página {capturedImages.length} de {capturedImages.length}
+                  </div>
                 </div>
-                <span className="font-extrabold text-xs">Enviar Foto do Arquivo</span>
-                <span className="text-[10px] text-slate-500 font-medium">JPEG, PNG ou Imagem de Nota</span>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  onChange={handleFileUpload}
-                  className="hidden"
-                />
-              </label>
+              )}
+
+              {/* Multi-page thumbnails & add another page */}
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-bold text-slate-700">
+                  {capturedImages.length}{' '}
+                  {capturedImages.length === 1 ? 'página capturada' : 'páginas capturadas'}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={startCamera}
+                    className="px-3 py-1.5 rounded-xl bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Outra Página</span>
+                  </button>
+                  <label className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1 cursor-pointer">
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Galeria</span>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={handleFileUpload}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+              </div>
+
+              {capturedImages.length > 1 && (
+                <div className="grid grid-cols-4 sm:grid-cols-6 gap-2 max-h-28 overflow-y-auto p-2 rounded-xl bg-slate-50 border border-slate-200">
+                  {capturedImages.map((img, idx) => (
+                    <div
+                      key={idx}
+                      className="relative group aspect-[3/4] rounded-lg overflow-hidden border border-slate-300 bg-white"
+                    >
+                      <img src={img} alt={`Página ${idx + 1}`} className="w-full h-full object-cover" />
+                      <div className="absolute top-1 left-1 px-1 py-0.5 rounded bg-black/70 text-white font-mono text-[9px]">
+                        #{idx + 1}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removePage(idx)}
+                        className="absolute top-1 right-1 p-1 rounded bg-rose-600 text-white cursor-pointer"
+                        title="Excluir página"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Prominent Mobile-First Enviar & Cancelar Buttons */}
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                <button
+                  type="button"
+                  disabled={isProcessing}
+                  onClick={handleCancelCaptured}
+                  className="py-3.5 px-4 rounded-2xl border-2 border-slate-300 bg-white hover:bg-slate-50 text-slate-800 font-extrabold text-sm sm:text-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  <X className="w-4 h-4 text-rose-600" />
+                  <span>Cancelar</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={isProcessing || capturedImages.length === 0}
+                  onClick={handleGeneratePdfAndSave}
+                  className="py-3.5 px-4 rounded-2xl bg-[#00897b] hover:bg-[#00695c] text-white font-extrabold text-sm sm:text-xs shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 active:scale-95 transition"
+                >
+                  {isProcessing ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Enviando...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4" />
+                      <span>Enviar</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           )}
 
           <canvas ref={canvasRef} className="hidden" />
-        </div>
-
-        {/* Captured Pages Gallery */}
-        {capturedImages.length > 0 && (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-xs font-bold text-slate-700">
-              <span>Páginas Capturadas ({capturedImages.length})</span>
-              <span className="text-[11px] text-slate-400">Serão unificadas em 1 arquivo PDF</span>
-            </div>
-            <div className="grid grid-cols-4 sm:grid-cols-6 gap-2.5 max-h-40 overflow-y-auto p-2 rounded-2xl bg-slate-50 border border-slate-200">
-              {capturedImages.map((img, idx) => (
-                <div key={idx} className="relative group aspect-[3/4] rounded-xl overflow-hidden border border-slate-300 bg-white shadow-2xs">
-                  <img src={img} alt={`Page ${idx + 1}`} className="w-full h-full object-cover" />
-                  <div className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-black/70 text-white font-mono text-[9px]">
-                    #{idx + 1}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => removePage(idx)}
-                    className="absolute inset-0 bg-rose-950/60 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-white cursor-pointer"
-                    title="Excluir página"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Footer Actions */}
-        <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
-          <button
-            type="button"
-            onClick={() => {
-              stopCamera();
-              onClose();
-            }}
-            className="px-5 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-semibold hover:bg-slate-50 text-xs cursor-pointer"
-          >
-            Cancelar
-          </button>
-          <button
-            type="button"
-            disabled={isProcessing || capturedImages.length === 0}
-            onClick={handleGeneratePdfAndSave}
-            className="px-6 py-2.5 rounded-xl bg-[#00897b] hover:bg-[#00695c] text-white font-extrabold text-xs shadow-md transition flex items-center gap-2 cursor-pointer disabled:opacity-50"
-          >
-            {isProcessing ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Gerando PDF & Salvando...</span>
-              </>
-            ) : (
-              <>
-                <FileText className="w-4 h-4" />
-                <span>Gerar PDF & Salvar no Sistema</span>
-              </>
-            )}
-          </button>
         </div>
       </div>
     </div>

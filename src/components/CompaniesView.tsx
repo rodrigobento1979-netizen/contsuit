@@ -17,6 +17,7 @@ import {
 import { Company, User } from '../types';
 import { ReportPrintModal, ReportColumn } from './ReportPrintModal';
 import { AppNavTab } from './Sidebar';
+import { isMasterUser, filterCompaniesForUser } from '../utils/auth';
 
 interface CompaniesViewProps {
   currentCompany: Company;
@@ -45,10 +46,8 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
   const [showReportModal, setShowReportModal] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  const isMasterOrAdmin =
-    currentUser.role === 'admin' ||
-    currentUser.role === 'accountant' ||
-    currentUser.email.toLowerCase().trim() === 'rodrigobento1979@gmail.com';
+  const isMaster = isMasterUser(currentUser);
+  const visibleCompanies = filterCompaniesForUser(allCompanies, currentUser);
 
   const handleRefresh = async () => {
     if (!onRefreshCompanies) return;
@@ -69,7 +68,7 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
     { key: 'createdByEmail', label: 'Cadastrada Por', align: 'left', format: (val) => val ? String(val) : 'Administrador' },
   ];
 
-  const filteredCompanies = allCompanies.filter(c => 
+  const filteredCompanies = visibleCompanies.filter(c => 
     (c.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
     (c.fantasyName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
     (c.cnpj || '').includes(searchTerm) ||
@@ -90,7 +89,7 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
               Cadastro de Empresas & Carteira de Clientes
             </h1>
             <p className="text-xs text-slate-500">
-              Total de <strong>{allCompanies.length}</strong> {allCompanies.length === 1 ? 'empresa cadastrada' : 'empresas cadastradas'} sob a administração de <strong>{currentUser.email}</strong>
+              Total de <strong>{visibleCompanies.length}</strong> {visibleCompanies.length === 1 ? 'empresa vinculada' : 'empresas vinculadas'} ao usuário <strong>{currentUser.email}</strong>
             </p>
           </div>
         </div>
@@ -128,7 +127,7 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
       </div>
 
       {/* Master Admin Broad Access Indicator */}
-      {isMasterOrAdmin && (
+      {isMaster && (
         <div className="p-3 rounded-2xl bg-indigo-50/70 border border-indigo-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-indigo-950">
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-indigo-600 shrink-0" />
@@ -137,7 +136,7 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
             </span>
           </div>
           <span className="text-[10px] font-bold bg-indigo-600 text-white px-2.5 py-1 rounded-full shrink-0 self-start sm:self-auto">
-            {allCompanies.length} {allCompanies.length === 1 ? 'Empresa Global' : 'Empresas Globais'}
+            {visibleCompanies.length} {visibleCompanies.length === 1 ? 'Empresa Global' : 'Empresas Globais'}
           </span>
         </div>
       )}
@@ -271,7 +270,7 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
 
                     <td className="py-3 px-3 sm:px-4 text-right whitespace-nowrap">
                       <div className="inline-flex items-center gap-1 justify-end">
-                        {isMasterOrAdmin && onQuickNavigate && (
+                        {isMaster && onQuickNavigate && (
                           <>
                             <button
                               onClick={() => onQuickNavigate(comp, 'documents')}
@@ -307,7 +306,7 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
                           <span className="text-[11px] font-semibold text-teal-700 px-2">
                             Selecionada
                           </span>
-                        ) : (
+                        ) : isMaster ? (
                           <button
                             onClick={() => onSelectCompany(comp)}
                             className="px-3 py-1 rounded-xl bg-teal-50 hover:bg-teal-600 text-teal-800 hover:text-white border border-teal-200 text-xs font-bold transition flex items-center gap-1 cursor-pointer"
@@ -315,7 +314,7 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
                             <span>Alternar</span>
                             <ArrowRight className="w-3 h-3" />
                           </button>
-                        )}
+                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -332,10 +331,10 @@ export const CompaniesView: React.FC<CompaniesViewProps> = ({
           isOpen={true}
           onClose={() => setShowReportModal(false)}
           title="Relatório da Carteira de Empresas & Clientes"
-          subtitle={`Relação de Empresas Sob Gestão • Administrador: ${currentUser.email}`}
+          subtitle={`Relação de Empresas Sob Gestão • Usuário: ${currentUser.email}`}
           company={currentCompany}
           summaryMetrics={[
-            { label: 'Total de Empresas', value: allCompanies.length },
+            { label: 'Total de Empresas', value: visibleCompanies.length },
             { label: 'Empresa Ativa', value: currentCompany.fantasyName || currentCompany.name },
             { label: 'Sistema Ativo', value: currentCompany.accountingSystem.toUpperCase() },
           ]}

@@ -61,6 +61,7 @@ import {
 import { splitAndClassifyPdfFile } from '../utils/pdfSplitter';
 import { PdfCanvasViewer } from './PdfCanvasViewer';
 import { useOfxAgent } from '../context/OfxAgentContext';
+import { isMasterUser, filterCompaniesForUser } from '../utils/auth';
 
 interface DocumentsViewProps {
   currentUser: User;
@@ -291,7 +292,8 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   onOpenInOfxConverter,
   showToast,
 }) => {
-  const isAdmin = currentUser.role === 'admin';
+  const isMaster = isMasterUser(currentUser);
+  const visibleCompanies = filterCompaniesForUser(allCompanies, currentUser);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const {
@@ -1588,14 +1590,14 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           {/* Company Selector */}
           <div className="flex items-center gap-2 sm:pl-3 sm:border-l sm:border-slate-200 shrink-0">
             <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-            {isAdmin ? (
+            {isMaster ? (
               <select
                 value={currentCompany.id}
                 onChange={(e) => onSelectCompany(e.target.value)}
                 aria-label="Selecionar empresa"
                 className="text-xs font-semibold text-slate-800 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-teal-500/30 focus:border-teal-600 cursor-pointer max-w-[190px] xl:max-w-[210px]"
               >
-                {allCompanies.map((c) => (
+                {visibleCompanies.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.fantasyName || c.name}
                   </option>
@@ -1984,11 +1986,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                   Pastas de Empresas (Formato [Nome] - [CNPJ])
                 </h3>
                 <span className="text-xs font-semibold text-slate-500">
-                  {allCompanies.length} empresas disponíveis
+                  {visibleCompanies.length} {visibleCompanies.length === 1 ? 'empresa disponível' : 'empresas disponíveis'}
                 </span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
-                {allCompanies.map((comp) => {
+                {visibleCompanies.map((comp) => {
                   const folderLabel = `${comp.fantasyName || comp.name} - ${comp.cnpj}`;
                   return (
                     <div
@@ -1996,7 +1998,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                       onClick={() => {
                         setExplorerCompanyId(comp.id);
                         setExplorerCategory(null);
-                        onSelectCompany(comp.id);
+                        if (isMaster) onSelectCompany(comp.id);
                       }}
                       className="p-4 rounded-2xl bg-white border border-slate-200 hover:border-teal-400 hover:shadow-md transition cursor-pointer flex items-start gap-3 group"
                     >

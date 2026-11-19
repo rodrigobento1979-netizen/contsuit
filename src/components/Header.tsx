@@ -9,6 +9,7 @@ import {
   Bot
 } from 'lucide-react';
 import { User, Company } from '../types';
+import { isMasterUser } from '../utils/auth';
 
 interface HeaderProps {
   currentUser: User;
@@ -31,7 +32,7 @@ export const Header: React.FC<HeaderProps> = ({
   onLogout,
   onToggleMobileMenu,
 }) => {
-  const isAdmin = currentUser.role === 'admin';
+  const isMaster = isMasterUser(currentUser);
 
   const tabTitles: Record<string, { title: string; subtitle: string }> = {
     home: { title: 'Visão Geral & Assistente', subtitle: 'Mostre-me como fazer rotinas contábeis' },
@@ -81,8 +82,8 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Right: Company Switcher, Cloud Status & User Session */}
         <div className="flex items-center gap-3 text-xs">
-          {/* Active Company Selector (for Admin / Accountant - Broad Access) */}
-          {(isAdmin || currentUser.role === 'accountant' || currentUser.email.toLowerCase().trim() === 'rodrigobento1979@gmail.com') && (
+          {/* Active Company Selector (Strictly Master Admin only; non-Master sees fixed logged-in company) */}
+          {isMaster ? (
             <div
               className="flex items-center gap-1.5 bg-black/20 px-2.5 py-1 rounded-xl border border-white/15"
               title={`Acesso amplo Administrador Master: ${allCompanies.length} empresas disponíveis`}
@@ -104,7 +105,17 @@ export const Header: React.FC<HeaderProps> = ({
                 ))}
               </select>
             </div>
-          )}
+          ) : currentCompany ? (
+            <div
+              className="hidden sm:flex items-center gap-1.5 bg-black/20 px-2.5 py-1 rounded-xl border border-white/15"
+              title="Empresa vinculada ao seu usuário"
+            >
+              <Building2 className="w-3.5 h-3.5 text-[#80cbc4]" />
+              <span className="text-white font-bold text-xs truncate max-w-[190px]">
+                {currentCompany.fantasyName || currentCompany.name}
+              </span>
+            </div>
+          ) : null}
 
           {/* Firebase Cloud Status Chip */}
           <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-black/15 border border-white/10 text-[11px] text-[#e0f2f1]">

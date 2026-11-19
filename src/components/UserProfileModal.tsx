@@ -14,6 +14,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { User, Company } from '../types';
+import { isMasterUser } from '../utils/auth';
 
 interface UserProfileModalProps {
   isOpen: boolean;
@@ -40,10 +41,8 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
 
   if (!isOpen) return null;
 
-  const isMasterAdmin = (u: User) => {
-    const email = u.email.toLowerCase().trim();
-    return email === 'rodrigobento1979@gmail.com' || (u.role === 'admin' && email.includes('rodrigobento'));
-  };
+  const isMasterAdmin = (u: User) => isMasterUser(u);
+  const canSwitchProfiles = isMasterUser(currentUser);
 
   const handleInitiateSwitch = (targetUser: User) => {
     // If already current user
@@ -219,15 +218,16 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                 <div>
                   <span className="font-bold block">Regra de Isolamento de Dados:</span>
                   <span className="text-[11px] text-teal-800">
-                    {currentUser.role === 'admin' 
-                      ? 'Como Administrador Geral, você pode gerenciar todas as empresas e usuários com acesso livre sem restrições.'
-                      : 'Seu usuário visualiza estritamente os bens, quotas de depreciação e extratos bancários da sua empresa.'}
+                    {canSwitchProfiles
+                      ? 'Como Administrador Master, você pode gerenciar todas as empresas e usuários com acesso livre sem restrições.'
+                      : 'Seu usuário visualiza estritamente os dados, documentos e empresas cadastrados dentro do seu próprio usuário.'}
                   </span>
                 </div>
               </div>
             </div>
 
-            {/* Quick Profile Switcher */}
+            {/* Quick Profile Switcher (Master Admin Only) */}
+            {canSwitchProfiles && (
             <div className="pt-2 border-t border-slate-100">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
@@ -282,6 +282,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                 })}
               </div>
             </div>
+            )}
 
             <div className="flex justify-end pt-2">
               <button

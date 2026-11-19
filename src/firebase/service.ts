@@ -205,8 +205,9 @@ export async function syncUserToFirestore(user: User): Promise<void> {
   try {
     await setDoc(doc(db, 'users', user.id), user, { merge: true });
 
-    // Se for admin, registra também em /admins para validação de regras de segurança
-    if (user.role === 'admin' || user.email === 'rodrigobento1979@gmail.com') {
+    // Apenas o Administrador Master é registrado em /admins para validação de regras globais
+    const normEmail = (user.email || '').toLowerCase().trim();
+    if (normEmail === 'rodrigobento1979@gmail.com' || normEmail === 'contsuitesistemas@gmail.com') {
       await setDoc(doc(db, 'admins', user.id), {
         email: user.email,
         createdAt: new Date().toISOString(),

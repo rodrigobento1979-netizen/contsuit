@@ -20,6 +20,7 @@ import { DocumentScannerModal } from './components/DocumentScannerModal';
 import { AssetSmartImportModal } from './components/AssetSmartImportModal';
 import { OfxAgentProvider } from './context/OfxAgentContext';
 import { User, Company, Asset, DepreciationSummary, ConvertedStatement } from './types';
+import { isMasterUser, filterCompaniesForUser } from './utils/auth';
 import { Loader2, AlertCircle, CheckCircle } from 'lucide-react';
 import { 
   loginWithGoogle, 
@@ -171,21 +172,17 @@ export default function App() {
     }
   };
 
-  // 1. Fetch Companies and Users (Admin/Accountant vê TODAS as empresas; Cliente vê apenas as suas)
+  // 1. Fetch Companies and Users (Somente Usuário Master vê TODAS as empresas; demais usuários veem apenas suas próprias empresas)
   const fetchCompaniesAndUsers = useCallback(async () => {
     const normCurrentEmail = (currentUser.email || '').toLowerCase().trim();
-    const isMasterEmail =
-      normCurrentEmail === 'rodrigobento1979@gmail.com' ||
-      normCurrentEmail === 'contsuitesistemas@gmail.com';
-    const canViewAllCompanies =
-      isMasterEmail || currentUser.role === 'admin' || currentUser.role === 'accountant';
+    const canViewAllCompanies = isMasterUser(currentUser);
 
     let apiComps: Company[] = [];
     let apiUsers: User[] = [];
     try {
-      const companyUrl = !canViewAllCompanies && currentUser.companyId
-        ? `/api/companies?role=client&companyId=${encodeURIComponent(currentUser.companyId)}&userId=${encodeURIComponent(currentUser.id || '')}&email=${encodeURIComponent(normCurrentEmail)}`
-        : `/api/companies?role=admin&email=${encodeURIComponent(normCurrentEmail)}`;
+      const companyUrl = canViewAllCompanies
+        ? `/api/companies?role=admin&email=${encodeURIComponent(normCurrentEmail)}`
+        : `/api/companies?role=client&companyId=${encodeURIComponent(currentUser.companyId || '')}&userId=${encodeURIComponent(currentUser.id || '')}&email=${encodeURIComponent(normCurrentEmail)}`;
 
       const [compRes, usersRes] = await Promise.all([
         fetchWithRetry(companyUrl),
@@ -212,23 +209,19 @@ export default function App() {
       console.warn('Could not load users/companies from Firestore:', fErr);
     }
 
-    // Merge Companies from API, Firestore, and LocalStorage
+    // Merge Companies from API, Firestore, and LocalStorage (cache only for Master)
     let localComps: Company[] = [];
-    try {
-      const cached = localStorage.getItem('contsuite_cached_companies');
-      if (cached) localComps = JSON.parse(cached);
-    } catch {}
+    if (canViewAllCompanies) {
+      try {
+        const cached = localStorage.getItem('contsuite_cached_companies');
+        if (cached) localComps = JSON.parse(cached);
+      } catch {}
+    }
 
     const compMap = new Map<string, Company>();
     const rawCompanySources = canViewAllCompanies
       ? [...localComps, ...firestoreCompanies, ...apiComps]
-      : [...firestoreCompanies, ...apiComps].filter(
-          (c) =>
-            c &&
-            (c.id === currentUser.companyId ||
-              (currentUser.id && c.createdByUserId === currentUser.id) ||
-              (normCurrentEmail && c.createdByEmail?.toLowerCase().trim() === normCurrentEmail))
-        );
+      : filterCompaniesForUser([...firestoreCompanies, ...apiComps], currentUser);
 
     rawCompanySources.forEach(c => {
       if (c && c.id) {
@@ -258,19 +251,30 @@ export default function App() {
       }
     }
 
-    if (mergedComps.length > 0) {
-      setAllCompanies(mergedComps);
-      if (canViewAllCompanies) {
+    if (canViewAllCompanies) {
+      if (mergedComps.length > 0) {
+        setAllCompanies(mergedComps);
         try {
           localStorage.setItem('contsuite_cached_companies', JSON.stringify(mergedComps));
         } catch {}
-      }
 
-      const found = mergedComps.find(c => c.id === currentCompanyIdRef.current);
-      if (found) {
-        setCurrentCompany(found);
-      } else {
-        setCurrentCompany(mergedComps[0]);
+        const found = mergedComps.find(c => c.id === currentCompanyIdRef.current);
+        if (found) {
+          setCurrentCompany(found);
+        } else {
+          setCurrentCompany(mergedComps[0]);
+        }
+      }
+    } else {
+      // Strict isolation for non-Master users: NEVER retain Master's companies in state
+      setAllCompanies(mergedComps);
+      if (mergedComps.length > 0) {
+        const found = mergedComps.find(c => c.id === currentCompanyIdRef.current);
+        if (found) {
+          setCurrentCompany(found);
+        } else {
+          setCurrentCompany(mergedComps[0]);
+        }
       }
     }
 
@@ -459,12 +463,10 @@ export default function App() {
       setFirebaseUser(user);
       if (user && user.email) {
         const normEmail = user.email.toLowerCase().trim();
-        const isMasterEmail =
-          normEmail === 'rodrigobento1979@gmail.com' ||
-          normEmail === 'contsuitesistemas@gmail.com';
+        const isMasterEmail = isMasterUser({ email: normEmail });
 
         let resolvedRole: User['role'] = isMasterEmail ? 'admin' : 'client';
-        let resolvedCompanyId = currentCompanyIdRef.current || 'comp-master';
+        let resolvedCompanyId = isMasterEmail ? (currentCompanyIdRef.current || 'comp-master') : '';
 
         if (!isMasterEmail) {
           try {
@@ -525,6 +527,9 @@ export default function App() {
         const data = await res.json();
         if (data.user) {
           setCurrentUser(data.user);
+          if (!isMasterUser(data.user)) {
+            setAllCompanies(prev => filterCompaniesForUser(prev, data.user));
+          }
           if (data.company) {
             setCurrentCompany(data.company);
           }
@@ -574,6 +579,9 @@ export default function App() {
 
       const activeUser = { ...userCandidate, status: 'active' as const };
       setCurrentUser(activeUser);
+      if (!isMasterUser(activeUser)) {
+        setAllCompanies(prev => filterCompaniesForUser(prev, activeUser));
+      }
       if (comp) {
         setCurrentCompany(comp);
       }
@@ -609,7 +617,9 @@ export default function App() {
     }
     setIsAuthenticated(false);
     setActiveTab('home');
+    setAllCompanies([]);
     localStorage.removeItem('contsuite_logged_in');
+    localStorage.removeItem('contsuite_cached_companies');
     showToast('Sessão encerrada com sucesso.');
   };
 
@@ -622,8 +632,12 @@ export default function App() {
     }
   }, [isAuthenticated, fetchAssets, fetchDepreciation, fetchStatements]);
 
-  // Handlers for switching company
+  // Handlers for switching company (Strictly Master Admin only)
   const handleSwitchCompany = (companyId: string) => {
+    if (!isMasterUser(currentUser)) {
+      showToast('Apenas o Usuário Master pode alternar entre empresas.', 'error');
+      return;
+    }
     const target = allCompanies.find(c => c.id === companyId);
     if (target) {
       setCurrentCompany(target);
@@ -634,11 +648,15 @@ export default function App() {
   // Handlers for switching user profile
   const handleSwitchUser = (user: User) => {
     setCurrentUser(user);
-    const company = allCompanies.find(c => c.id === user.companyId);
+    const allowedCompanies = filterCompaniesForUser(allCompanies, user);
+    if (!isMasterUser(user)) {
+      setAllCompanies(allowedCompanies);
+    }
+    const company = allowedCompanies.find(c => c.id === user.companyId) || allowedCompanies[0];
     if (company) {
       setCurrentCompany(company);
     }
-    if (user.role !== 'admin' && activeTab === 'admin') {
+    if (!isMasterUser(user) && activeTab === 'admin') {
       setActiveTab('assets');
     }
     showToast(`Perfil alternado para: ${user.name} (${company?.fantasyName || 'Empresa'})`);
@@ -1158,8 +1176,8 @@ export default function App() {
                 />
               )}
 
-              {/* 8. Gestão de Usuários & Convites (Admin Only) */}
-              {activeTab === 'admin' && currentUser.role === 'admin' && (
+              {/* 8. Gestão de Usuários & Convites (Master Admin Only) */}
+              {activeTab === 'admin' && isMasterUser(currentUser) && (
                 <AdminUsersView
                   currentUser={currentUser}
                   allUsers={allUsers}
@@ -1234,7 +1252,7 @@ export default function App() {
         isOpen={isHelpModalOpen}
         onClose={() => setIsHelpModalOpen(false)}
         onNavigate={(tab) => setActiveTab(tab)}
-        isAdmin={currentUser.role === 'admin'}
+        isAdmin={isMasterUser(currentUser)}
       />
 
       {/* Document Scanner / Camera Modal */}
@@ -1243,8 +1261,6 @@ export default function App() {
         onClose={() => setIsScannerModalOpen(false)}
         currentUser={currentUser}
         currentCompany={currentCompany}
-        allCompanies={allCompanies}
-        onSelectCompany={handleSwitchCompany}
         showToast={showToast}
         onDocumentSaved={(doc) => {
           if (activeTab !== 'documents') setActiveTab('documents');
