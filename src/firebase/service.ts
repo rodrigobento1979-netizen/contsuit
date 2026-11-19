@@ -7,7 +7,8 @@ import {
   updateDoc, 
   deleteDoc, 
   query, 
-  where 
+  where,
+  onSnapshot
 } from 'firebase/firestore';
 import { 
   signInWithPopup, 
@@ -282,4 +283,26 @@ export async function deleteDocumentFromFirestore(companyId: string, documentId:
     handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
+
+export function subscribeDocumentsFromFirestore(
+  companyId: string,
+  onDocs: (docs: CompanyDocument[]) => void
+): () => void {
+  if (!auth.currentUser || !companyId) return () => {};
+  const colRef = collection(db, 'companies', companyId, 'documents');
+  return onSnapshot(
+    colRef,
+    (snap) => {
+      const list: CompanyDocument[] = [];
+      snap.forEach((d) => {
+        list.push({ id: d.id, ...d.data() } as CompanyDocument);
+      });
+      onDocs(list);
+    },
+    (error) => {
+      console.warn('Firestore documents realtime listener warning:', error);
+    }
+  );
+}
+
 

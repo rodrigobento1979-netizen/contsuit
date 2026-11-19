@@ -49,6 +49,7 @@ import {
   saveDocumentToFirestore,
   deleteDocumentFromFirestore,
   fetchStatementsFromFirestore,
+  subscribeDocumentsFromFirestore,
 } from '../firebase/service';
 import {
   base64ToBlob,
@@ -372,9 +373,52 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
   const cacheKey = `contsuite_cached_docs_${currentCompany.id}`;
 
-  const loadDocuments = useCallback(async () => {
+  const mergeDocsIntoState = useCallback(
+    (incomingDocs: CompanyDocument[]) => {
+      if (!currentCompany.id || incomingDocs.length === 0) return;
+      setDocuments((prev) => {
+        const map = new Map<string, CompanyDocument>();
+        prev.forEach((d) => {
+          if (d && d.id && d.companyId === currentCompany.id) {
+            map.set(d.id, d);
+          }
+        });
+        let changed = false;
+        incomingDocs.forEach((d) => {
+          if (d && d.id && d.companyId === currentCompany.id) {
+            const existing = map.get(d.id);
+            const nextDoc: CompanyDocument = {
+              ...existing,
+              ...d,
+              hasOriginalFile: Boolean(d.hasOriginalFile || existing?.hasOriginalFile),
+            };
+            if (
+              !existing ||
+              existing.updatedAt !== nextDoc.updatedAt ||
+              existing.status !== nextDoc.status ||
+              existing.category !== nextDoc.category
+            ) {
+              changed = true;
+            }
+            map.set(d.id, nextDoc);
+          }
+        });
+        if (!changed && prev.length === map.size) return prev;
+        const merged = Array.from(map.values()).sort(
+          (a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
+        );
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify(merged.map(({ fileBase64, ...rest }) => rest)));
+        } catch {}
+        return merged;
+      });
+    },
+    [currentCompany.id, cacheKey]
+  );
+
+  const loadDocuments = useCallback(async (silent: boolean = false) => {
     if (!currentCompany.id) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     let apiDocs: CompanyDocument[] = [];
     try {
       const res = await fetch(`/api/documents?companyId=${currentCompany.id}`, { cache: 'no-store' });
@@ -382,21 +426,32 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         apiDocs = await res.json();
       }
     } catch (err) {
-      console.warn('Could not load documents from API:', err);
+      if (!silent) console.warn('Could not load documents from API:', err);
     }
 
     let firestoreDocs: CompanyDocument[] = [];
-    try {
-      firestoreDocs = await fetchDocumentsFromFirestore(currentCompany.id);
-    } catch (err) {
-      console.warn('Could not load documents from Firestore:', err);
+    if (!silent) {
+      try {
+        firestoreDocs = await fetchDocumentsFromFirestore(currentCompany.id);
+      } catch (err) {
+        console.warn('Could not load documents from Firestore:', err);
+      }
     }
 
     let localDocs: CompanyDocument[] = [];
-    try {
-      const raw = localStorage.getItem(cacheKey);
-      if (raw) localDocs = JSON.parse(raw);
-    } catch {}
+    if (!silent) {
+      try {
+        const raw = localStorage.getItem(cacheKey);
+        if (raw) localDocs = JSON.parse(raw);
+      } catch {}
+    }
+
+    if (silent) {
+      if (apiDocs.length > 0) {
+        mergeDocsIntoState(apiDocs);
+      }
+      return;
+    }
 
     const map = new Map<string, CompanyDocument>();
     [...localDocs, ...firestoreDocs, ...apiDocs].forEach((d) => {
@@ -418,15 +473,57 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       localStorage.setItem(cacheKey, JSON.stringify(merged.map(({ fileBase64, ...rest }) => rest)));
     } catch {}
     setLoading(false);
-  }, [currentCompany.id, cacheKey]);
+  }, [currentCompany.id, cacheKey, mergeDocsIntoState]);
 
   useEffect(() => {
-    loadDocuments();
+    void loadDocuments(false);
   }, [loadDocuments]);
+
+  // Real-time cross-device sync: Firestore onSnapshot + instant custom event + silent 3s API poll
+  useEffect(() => {
+    if (!currentCompany.id) return;
+
+    const unsubscribe = subscribeDocumentsFromFirestore(currentCompany.id, (liveDocs) => {
+      if (liveDocs.length > 0) {
+        mergeDocsIntoState(liveDocs);
+      }
+    });
+
+    const handleLocalDocSaved = (e: Event) => {
+      const customEv = e as CustomEvent<CompanyDocument>;
+      if (customEv.detail && customEv.detail.companyId === currentCompany.id) {
+        mergeDocsIntoState([customEv.detail]);
+      }
+    };
+
+    const handleFocusOrVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void loadDocuments(true);
+      }
+    };
+
+    window.addEventListener('contsuite:document-saved', handleLocalDocSaved);
+    window.addEventListener('focus', handleFocusOrVisibility);
+    document.addEventListener('visibilitychange', handleFocusOrVisibility);
+
+    const pollInterval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void loadDocuments(true);
+      }
+    }, 3000);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener('contsuite:document-saved', handleLocalDocSaved);
+      window.removeEventListener('focus', handleFocusOrVisibility);
+      document.removeEventListener('visibilitychange', handleFocusOrVisibility);
+      window.clearInterval(pollInterval);
+    };
+  }, [currentCompany.id, loadDocuments, mergeDocsIntoState]);
 
   useEffect(() => {
     if (lastInboxSyncEventTs > 0) {
-      void loadDocuments();
+      void loadDocuments(true);
     }
   }, [lastInboxSyncEventTs, loadDocuments]);
 

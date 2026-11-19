@@ -1606,6 +1606,7 @@ apiRouter.post('/documents/process', async (req: Request, res: Response) => {
 apiRouter.post('/documents', async (req: Request, res: Response) => {
   try {
     const {
+      id,
       companyId,
       fileName,
       mimeType,
@@ -1668,6 +1669,7 @@ apiRouter.post('/documents', async (req: Request, res: Response) => {
     }
 
     const created = createDocument({
+      id: typeof id === 'string' ? id : undefined,
       companyId: String(companyId),
       fileName: String(fileName).slice(0, 200),
       mimeType: String(mimeType || 'application/octet-stream').slice(0, 120),

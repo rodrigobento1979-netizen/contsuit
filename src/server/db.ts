@@ -853,13 +853,30 @@ export function getDocumentById(id: string) {
   return (db.documents || []).find(d => d.id === id);
 }
 
-export function createDocument(doc: Omit<CompanyDocument, 'id' | 'uploadedAt' | 'updatedAt'>) {
+export function createDocument(
+  doc: Omit<CompanyDocument, 'id' | 'uploadedAt' | 'updatedAt'> & { id?: string }
+) {
   const db = loadDb();
   if (!db.documents) db.documents = [];
   const now = new Date().toISOString();
+  const validId =
+    doc.id && /^[a-zA-Z0-9_-]{3,128}$/.test(doc.id)
+      ? doc.id
+      : 'doc-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 10000);
+  const existingIdx = db.documents.findIndex(d => d.id === validId);
+  if (existingIdx !== -1) {
+    db.documents[existingIdx] = {
+      ...db.documents[existingIdx],
+      ...doc,
+      id: validId,
+      updatedAt: now,
+    };
+    saveDb(db);
+    return db.documents[existingIdx];
+  }
   const newDoc: CompanyDocument = {
     ...doc,
-    id: 'doc-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 10000),
+    id: validId,
     uploadedAt: now,
     updatedAt: now,
   };
