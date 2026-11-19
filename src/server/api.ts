@@ -10,15 +10,18 @@ import {
   getUserByEmail,
   createUser,
   updateUser,
+  upsertUser,
   deleteUser,
   getAssets,
   getAssetById,
   createAsset,
   updateAsset,
+  upsertAsset,
   deleteAsset,
   getStatements,
   getStatementById,
   saveStatement,
+  upsertStatement,
   deleteStatement,
   getFees,
   getFeeById,
@@ -38,6 +41,7 @@ import {
   getDocumentById,
   createDocument,
   updateDocument,
+  upsertDocument,
   deleteDocument,
 } from './db.ts';
 import {
@@ -148,6 +152,27 @@ apiRouter.get('/health', (req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+const MASTER_ADMIN_EMAILS = ['rodrigobento1979@gmail.com', 'contsuitesistemas@gmail.com'];
+
+function isMasterEmailServer(email?: string | null): boolean {
+  if (!email) return false;
+  return MASTER_ADMIN_EMAILS.includes(email.toLowerCase().trim());
+}
+
+function getCompaniesForUserServer(user: { id?: string; email?: string; companyId?: string }) {
+  const all = getCompanies();
+  if (isMasterEmailServer(user.email)) return all;
+  const normEmail = (user.email || '').toLowerCase().trim();
+  return all.filter(c => {
+    if (!c || c.id === 'comp-master') return false;
+    if (user.companyId && c.id === user.companyId) return true;
+    if (user.id && c.createdByUserId === user.id) return true;
+    if (normEmail && c.createdByEmail?.toLowerCase().trim() === normEmail) return true;
+    if (normEmail && c.contactEmail?.toLowerCase().trim() === normEmail) return true;
+    return false;
+  });
+}
+
 // ---------------------------------------------------------
 // AUTH & CONTEXT
 // ---------------------------------------------------------
@@ -155,22 +180,65 @@ apiRouter.post('/auth/login', (req: Request, res: Response) => {
   try {
     const { email } = req.body;
     if (!email) {
-      return res.status(400).json({ error: 'E-mail obrigatório' });
+      return res.status(400).json({ error: 'Usuário ou e-mail obrigatório' });
     }
 
-    const normEmail = email.toLowerCase().trim();
-    let user = getUserByEmail(normEmail);
+    const normInput = String(email).toLowerCase().trim();
+    const allUsers = getUsers();
+    const allCompanies = getCompanies();
 
-    // If master admin email, ensure active admin
-    if (normEmail === 'rodrigobento1979@gmail.com') {
+    let user = getUserByEmail(normInput);
+
+    // Master admin safety seed
+    if (isMasterEmailServer(normInput)) {
       if (!user) {
         user = createUser({
-          name: 'Rodrigo Bento',
-          email: 'rodrigobento1979@gmail.com',
+          name: normInput === 'rodrigobento1979@gmail.com' ? 'Rodrigo Bento' : 'ContSuite Sistemas',
+          email: normInput,
           role: 'admin',
           companyId: 'comp-master',
           status: 'active',
         });
+      }
+    }
+
+    // Fallback: login by username / display name / company fantasyName or name (e.g. "SSCONT")
+    if (!user) {
+      const byName = allUsers.filter(
+        u =>
+          u.name.toLowerCase().trim() === normInput ||
+          u.email.toLowerCase().split('@')[0] === normInput
+      );
+      if (byName.length === 1) {
+        user = byName[0];
+      }
+    }
+
+    if (!user) {
+      const matchedComp = allCompanies.find(
+        c =>
+          c.id !== 'comp-master' &&
+          (c.fantasyName?.toLowerCase().trim() === normInput ||
+            c.name?.toLowerCase().trim() === normInput ||
+            (normInput.includes('@') &&
+              (c.createdByEmail?.toLowerCase().trim() === normInput ||
+                c.contactEmail?.toLowerCase().trim() === normInput)))
+      );
+      if (matchedComp) {
+        const linkedEmail = (matchedComp.createdByEmail || matchedComp.contactEmail || '').toLowerCase().trim();
+        user =
+          (linkedEmail ? getUserByEmail(linkedEmail) : undefined) ||
+          allUsers.find(u => u.companyId === matchedComp.id || (matchedComp.createdByUserId && u.id === matchedComp.createdByUserId));
+
+        if (!user && linkedEmail) {
+          user = createUser({
+            name: matchedComp.createdByName || matchedComp.fantasyName || linkedEmail.split('@')[0],
+            email: linkedEmail,
+            role: 'client',
+            companyId: matchedComp.id,
+            status: 'active',
+          });
+        }
       }
     }
 
@@ -185,11 +253,20 @@ apiRouter.post('/auth/login', (req: Request, res: Response) => {
       user = updateUser(user.id, { status: 'active' }) || user;
     }
 
-    const company = getCompanyById(user.companyId);
+    const companies = getCompaniesForUserServer(user);
+    let company =
+      companies.find(c => c.id === user!.companyId) ||
+      companies[0] ||
+      (isMasterEmailServer(user.email) ? getCompanyById('comp-master') : undefined);
+
+    if (!isMasterEmailServer(user.email) && company && (!user.companyId || user.companyId === 'comp-master')) {
+      user = updateUser(user.id, { companyId: company.id }) || { ...user, companyId: company.id };
+    }
 
     return res.json({
       user,
-      company,
+      company: company || null,
+      companies,
     });
   } catch (err: any) {
     console.error('Error in login:', err);
@@ -405,24 +482,25 @@ apiRouter.post('/users/sync', (req: Request, res: Response) => {
     if (!user || !user.email) {
       return res.status(400).json({ error: 'Dados do usuário inválidos' });
     }
-    const normEmail = user.email.toLowerCase().trim();
-    let existing = getUserByEmail(normEmail);
-    if (!existing) {
-      if (company && !getCompanyById(company.id)) {
-        createCompany(company);
-      }
-      existing = createUser({
-        name: user.name || normEmail.split('@')[0],
-        email: normEmail,
-        role: user.role || 'client',
-        companyId: user.companyId || (company?.id || 'comp-master'),
-        status: user.status || 'active',
-        invitationToken: user.invitationToken,
-        invitedAt: user.invitedAt,
-      });
+    if (company && company.id && (company.name || company.fantasyName)) {
+      upsertCompany(company);
     }
-    const targetComp = getCompanyById(existing.companyId);
-    return res.json({ success: true, user: existing, company: targetComp });
+    const syncedUser = upsertUser({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      companyId: user.companyId || company?.id || '',
+      status: user.status || 'active',
+      invitationToken: user.invitationToken,
+      invitedAt: user.invitedAt,
+    });
+    const companies = getCompaniesForUserServer(syncedUser);
+    const targetComp =
+      companies.find(c => c.id === syncedUser.companyId) ||
+      companies[0] ||
+      (isMasterEmailServer(syncedUser.email) ? getCompanyById('comp-master') : undefined);
+    return res.json({ success: true, user: syncedUser, company: targetComp || null, companies });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -776,14 +854,17 @@ apiRouter.get('/companies', (req: Request, res: Response) => {
     const { companyId, userId, email } = req.query;
     const all = getCompanies();
     const normEmail = typeof email === 'string' ? email.toLowerCase().trim() : '';
-    const isMaster = normEmail === 'rodrigobento1979@gmail.com' || normEmail === 'contsuitesistemas@gmail.com';
+    const isMaster = isMasterEmailServer(normEmail);
     // Strict isolation: only Master Admin receives ALL companies; every other user sees only their own company or companies they registered
     if (!isMaster) {
-      const filtered = all.filter(c =>
-        (companyId && c.id === companyId) ||
-        (userId && c.createdByUserId === userId) ||
-        (normEmail && c.createdByEmail?.toLowerCase().trim() === normEmail)
-      );
+      const filtered = all.filter(c => {
+        if (!c || c.id === 'comp-master') return false;
+        if (companyId && c.id === companyId) return true;
+        if (userId && c.createdByUserId === userId) return true;
+        if (normEmail && c.createdByEmail?.toLowerCase().trim() === normEmail) return true;
+        if (normEmail && c.contactEmail?.toLowerCase().trim() === normEmail) return true;
+        return false;
+      });
       return res.json(filtered);
     }
     return res.json(all);
@@ -1322,9 +1403,31 @@ apiRouter.delete('/ofx/statements/:id', (req: Request, res: Response) => {
 // ---------------------------------------------------------
 apiRouter.get('/fees', (req: Request, res: Response) => {
   try {
-    const { companyId } = req.query;
-    const fees = getFees(companyId as string);
-    return res.json(fees);
+    const { companyId, email } = req.query;
+    const normEmail = typeof email === 'string' ? email.toLowerCase().trim() : '';
+    const isMaster = isMasterEmailServer(normEmail);
+
+    if (isMaster) {
+      const fees = getFees(companyId as string);
+      return res.json(fees);
+    }
+
+    if (companyId && companyId !== 'all' && String(companyId).trim() !== '') {
+      return res.json(getFees(String(companyId)));
+    }
+
+    if (normEmail) {
+      const user = getUserByEmail(normEmail);
+      const userCompanies = getCompaniesForUserServer({
+        id: user?.id,
+        email: normEmail,
+        companyId: user?.companyId,
+      });
+      if (userCompanies.length === 0) return res.json([]);
+      return res.json(getFees(undefined, userCompanies.map(c => c.id)));
+    }
+
+    return res.json([]);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -1503,6 +1606,59 @@ apiRouter.post('/database/clear-demo', (req: Request, res: Response) => {
     return res.json(result);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
+  }
+});
+
+// Idempotent mirror sync from Firestore / client cache into db.json so email-based sessions have full parity
+apiRouter.post('/database/sync-mirror', (req: Request, res: Response) => {
+  try {
+    const { companies, users, assets, statements, documents } = req.body || {};
+    let syncedCounts = { companies: 0, users: 0, assets: 0, statements: 0, documents: 0 };
+
+    if (Array.isArray(companies)) {
+      for (const c of companies) {
+        if (c && c.id) {
+          upsertCompany(c);
+          syncedCounts.companies++;
+        }
+      }
+    }
+    if (Array.isArray(users)) {
+      for (const u of users) {
+        if (u && u.email) {
+          upsertUser(u);
+          syncedCounts.users++;
+        }
+      }
+    }
+    if (Array.isArray(assets)) {
+      for (const a of assets) {
+        if (a && a.id && a.companyId) {
+          upsertAsset(a);
+          syncedCounts.assets++;
+        }
+      }
+    }
+    if (Array.isArray(statements)) {
+      for (const s of statements) {
+        if (s && s.id && s.companyId) {
+          upsertStatement(s);
+          syncedCounts.statements++;
+        }
+      }
+    }
+    if (Array.isArray(documents)) {
+      for (const d of documents) {
+        if (d && d.id && d.companyId) {
+          upsertDocument(d);
+          syncedCounts.documents++;
+        }
+      }
+    }
+
+    return res.json({ success: true, syncedCounts });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Falha ao espelhar registros no servidor.' });
   }
 });
 

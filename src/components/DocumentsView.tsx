@@ -481,8 +481,32 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     try {
       localStorage.setItem(cacheKey, JSON.stringify(merged.map(({ fileBase64, ...rest }) => rest)));
     } catch {}
+
+    // Garante que documentos carregados do Firestore (ex: enviados pelo celular via login Google) também fiquem espelhados no db.json para login por email/usuário
+    if (firestoreDocs.length > 0) {
+      const apiDocIds = new Set(apiDocs.map((d) => d.id));
+      const missingInApi = merged.filter((d) => !apiDocIds.has(d.id));
+      if (missingInApi.length > 0) {
+        fetch('/api/database/sync-mirror', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            documents: missingInApi.map(({ fileBase64, ...rest }) => rest),
+          }),
+        }).catch(() => {});
+      }
+    }
+
     setLoading(false);
   }, [currentCompany.id, cacheKey, mergeDocsIntoState]);
+
+  useEffect(() => {
+    setExplorerCompanyId(null);
+    setExplorerCategory(null);
+    setDocuments([]);
+    setSelectedDoc(null);
+    setSearchTerm('');
+  }, [currentCompany.id, currentUser.id]);
 
   useEffect(() => {
     void loadDocuments(false);
@@ -2175,7 +2199,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             /* Level 2: Category Subfolders inside Selected Company */
             <div className="space-y-4">
               {(() => {
-                const comp = allCompanies.find((c) => c.id === explorerCompanyId) || currentCompany;
+                const comp = visibleCompanies.find((c) => c.id === explorerCompanyId) || currentCompany;
                 return (
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
                     <div className="flex items-center gap-2.5">
@@ -2230,7 +2254,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             /* Level 3: Documents List inside Category Subfolder */
             <div className="space-y-4">
               {(() => {
-                const comp = allCompanies.find((c) => c.id === explorerCompanyId) || currentCompany;
+                const comp = visibleCompanies.find((c) => c.id === explorerCompanyId) || currentCompany;
                 const catMeta = CATEGORY_COLUMNS.find((c) => c.id === explorerCategory);
                 const catDocs = filteredDocs.filter((d) => d.category === explorerCategory);
                 return (

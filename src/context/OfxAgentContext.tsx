@@ -583,6 +583,19 @@ export const OfxAgentProvider: React.FC<{
     } catch {}
   }, [manualJob]);
 
+  useEffect(() => {
+    setRecentStatements([]);
+    setManualJob((prev) => {
+      if (prev && prev.companyId !== currentCompany?.id) {
+        try {
+          localStorage.removeItem(MANUAL_JOB_STORAGE_KEY);
+        } catch {}
+        return null;
+      }
+      return prev;
+    });
+  }, [currentCompany?.id]);
+
   const setAutoRunEnabled = useCallback((enabled: boolean) => {
     setConfig((prev) => ({
       ...prev,

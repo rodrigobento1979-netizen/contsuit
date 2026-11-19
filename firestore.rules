@@ -31,8 +31,17 @@ service cloud.firestore {
         isAdmin() ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.companyId == companyId) ||
-        (exists(/databases/$(database)/documents/companies/$(companyId)) &&
-         get(/databases/$(database)/documents/companies/$(companyId)).data.createdByUserId == request.auth.uid)
+        (exists(/databases/$(database)/documents/companies/$(companyId)) && (
+          get(/databases/$(database)/documents/companies/$(companyId)).data.createdByUserId == request.auth.uid ||
+          (request.auth.token.email_verified == true && (
+            ('createdByEmail' in get(/databases/$(database)/documents/companies/$(companyId)).data &&
+             get(/databases/$(database)/documents/companies/$(companyId)).data.createdByEmail is string &&
+             get(/databases/$(database)/documents/companies/$(companyId)).data.createdByEmail.lower() == request.auth.token.email.lower()) ||
+            ('contactEmail' in get(/databases/$(database)/documents/companies/$(companyId)).data &&
+             get(/databases/$(database)/documents/companies/$(companyId)).data.contactEmail is string &&
+             get(/databases/$(database)/documents/companies/$(companyId)).data.contactEmail.lower() == request.auth.token.email.lower())
+          ))
+        ))
       );
     }
 
