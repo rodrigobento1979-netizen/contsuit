@@ -1319,6 +1319,11 @@ export const OfxAgentProvider: React.FC<{
                     ...savedDoc,
                     hasOriginalFile: true,
                   }).catch(() => {});
+                  window.dispatchEvent(
+                    new CustomEvent('contsuite:document-saved', {
+                      detail: { ...savedDoc, fileBase64: grp.base64, hasOriginalFile: true },
+                    })
+                  );
                 }
               } catch (e) {
                 console.warn('Falha ao salvar grupo separado em Arquivos:', e);
@@ -1365,6 +1370,11 @@ export const OfxAgentProvider: React.FC<{
                       ...savedExtDoc,
                       hasOriginalFile: true,
                     }).catch(() => {});
+                    window.dispatchEvent(
+                      new CustomEvent('contsuite:document-saved', {
+                        detail: { ...savedExtDoc, fileBase64: extratoGroup.base64, hasOriginalFile: true },
+                      })
+                    );
                   }
                 } catch {}
               }

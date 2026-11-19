@@ -377,6 +377,10 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
 
   // Convert with persistent OfxAgentContext (continues running if user leaves screen & restores automatically)
   const handleConvert = async () => {
+    if (!currentCompany.id) {
+      setLocalErrorMessage('Nenhuma empresa ativa selecionada para vincular esta movimentação.');
+      return;
+    }
     if (!fileBase64 || !selectedFile) {
       setLocalErrorMessage('Por favor, selecione ou arraste um arquivo de extrato bancário.');
       return;

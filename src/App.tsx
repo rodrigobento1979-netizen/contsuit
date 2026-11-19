@@ -111,8 +111,10 @@ export default function App() {
   const [depreciationSummary, setDepreciationSummary] = useState<DepreciationSummary | null>(null);
   const [statements, setStatements] = useState<ConvertedStatement[]>([]);
 
-  // Firebase auth user
+  // Firebase auth user & readiness
   const [firebaseUser, setFirebaseUser] = useState<any>(null);
+  const [firebaseAuthReady, setFirebaseAuthReady] = useState(false);
+  const firebaseUid = firebaseUser?.uid || '';
 
   // Period for depreciation
   const [selectedMonth, setSelectedMonth] = useState<string>('2026-11');
@@ -161,6 +163,13 @@ export default function App() {
   useEffect(() => {
     currentCompanyIdRef.current = currentCompany.id;
   }, [currentCompany.id]);
+
+  const isAuthenticatedRef = useRef(isAuthenticated);
+  const currentUserEmailRef = useRef(currentUser.email);
+  useEffect(() => {
+    isAuthenticatedRef.current = isAuthenticated;
+    currentUserEmailRef.current = currentUser.email;
+  }, [isAuthenticated, currentUser.email]);
 
   // Resilient fetch wrapper for transient dev-server restarts or cold starts
   const fetchWithRetry = useCallback(async (
@@ -362,7 +371,7 @@ export default function App() {
         });
       }
 
-      // Mirror subcollections from Firestore -> API once per Master session so email logins see everything
+      // Mirror subcollections from Firestore -> API once per Master session when Firestore is populated
       if (masterMirrorSyncedRef.current !== normCurrentEmail && firestoreCompanies.length > 0) {
         masterMirrorSyncedRef.current = normCurrentEmail;
         Promise.all(
@@ -414,14 +423,14 @@ export default function App() {
         const found = mergedComps.find(c => c.id === currentCompanyIdRef.current);
         if (found) {
           setCurrentCompany(found);
-        } else {
+        } else if (firebaseAuthReady || !currentCompanyIdRef.current) {
           setCurrentCompany(mergedComps[0]);
         }
       }
     } else {
       // Strict isolation for non-Master users: NEVER retain Master's companies in state
-      setAllCompanies(mergedComps);
       if (mergedComps.length > 0) {
+        setAllCompanies(mergedComps);
         const found = mergedComps.find(c => c.id === currentCompanyIdRef.current);
         if (found && found.id !== 'comp-master') {
           setCurrentCompany(found);
@@ -431,11 +440,12 @@ export default function App() {
             setCurrentUser(prev => ({ ...prev, companyId: mergedComps[0].id }));
           }
         }
-      } else {
+      } else if (firebaseAuthReady || !currentCompanyIdRef.current || currentCompanyIdRef.current === 'comp-master') {
+        setAllCompanies([]);
         setCurrentCompany(NEUTRAL_EMPTY_COMPANY);
       }
     }
-  }, [isAuthenticated, currentUser.role, currentUser.companyId, currentUser.id, currentUser.email, fetchWithRetry]);
+  }, [isAuthenticated, currentUser.role, currentUser.companyId, currentUser.id, currentUser.email, firebaseUid, firebaseAuthReady, fetchWithRetry]);
 
   // 2. Fetch Assets for current company (Merges API + Firestore + LocalStorage + auto-mirrors)
   const fetchAssets = useCallback(async () => {
@@ -495,7 +505,16 @@ export default function App() {
         body: JSON.stringify({ assets: missingInApi }),
       }).catch(() => {});
     }
-  }, [currentCompany.id, fetchWithRetry]);
+
+    // Also push local/API assets missing from Firestore up to the cloud when Firebase Auth is active
+    if (firebaseUid) {
+      const fAssetIds = new Set(firestoreAssets.map(a => a.id));
+      const missingInFirestore = merged.filter(a => !fAssetIds.has(a.id));
+      missingInFirestore.forEach(a => {
+        saveAssetToFirestore(companyId, a).catch(() => {});
+      });
+    }
+  }, [currentCompany.id, firebaseUid, fetchWithRetry]);
 
   // 3. Fetch Depreciation Summary for current company & month
   const fetchDepreciation = useCallback(async () => {
@@ -580,7 +599,7 @@ export default function App() {
       );
     } catch {}
 
-    // Mirror Firestore statements missing from API back to db.json
+    // Mirror Firestore/local statements missing from API back to db.json
     const apiStmtIds = new Set(apiStmts.map(s => s.id));
     const missingInApi = merged.filter(s => !apiStmtIds.has(s.id));
     if (missingInApi.length > 0) {
@@ -590,7 +609,16 @@ export default function App() {
         body: JSON.stringify({ statements: missingInApi }),
       }).catch(() => {});
     }
-  }, [currentCompany.id, fetchWithRetry]);
+
+    // Also push API/local statements missing from Firestore up to the cloud when Firebase Auth is active
+    if (firebaseUid) {
+      const fStmtIds = new Set(firestoreStmts.map(s => s.id));
+      const missingInFirestore = merged.filter(s => !fStmtIds.has(s.id));
+      missingInFirestore.forEach(s => {
+        saveStatementToFirestore(companyId, s).catch(() => {});
+      });
+    }
+  }, [currentCompany.id, firebaseUid, fetchWithRetry]);
 
   const handleStatementCreated = useCallback((stmt: ConvertedStatement) => {
     if (!stmt || !stmt.id) return;
@@ -668,8 +696,25 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = subscribeToAuth(async (user) => {
       setFirebaseUser(user);
+      setFirebaseAuthReady(true);
+
       if (user && user.email) {
         const normEmail = user.email.toLowerCase().trim();
+        const authMode = localStorage.getItem('contsuite_auth_mode');
+        const wasLoggedInSameEmail =
+          isAuthenticatedRef.current &&
+          currentUserEmailRef.current?.toLowerCase().trim() === normEmail;
+
+        // If user explicitly logged in via Email/Company (e.g. SSCONT), do not overwrite with another Google session
+        if (
+          authMode === 'email' &&
+          isAuthenticatedRef.current &&
+          currentUserEmailRef.current &&
+          currentUserEmailRef.current.toLowerCase().trim() !== normEmail
+        ) {
+          return;
+        }
+
         const isMasterEmail = isMasterUser({ email: normEmail });
 
         let resolvedRole: User['role'] = isMasterEmail ? 'admin' : 'client';
@@ -742,7 +787,10 @@ export default function App() {
         if (!isMasterEmail) {
           const allowed = filterCompaniesForUser(candidateCompanies, syncedUser);
           matchedCompany =
-            allowed.find(c => c.id === resolvedCompanyId) || allowed[0] || matchedCompany;
+            allowed.find(c => c.id === currentCompanyIdRef.current) ||
+            allowed.find(c => c.id === resolvedCompanyId) ||
+            allowed[0] ||
+            matchedCompany;
           if (matchedCompany) {
             syncedUser.companyId = matchedCompany.id;
             setAllCompanies(allowed.length > 0 ? allowed : [matchedCompany]);
@@ -771,8 +819,12 @@ export default function App() {
 
         setCurrentUser(syncedUser);
         setIsAuthenticated(true);
-        setActiveTab('home');
+        if (!wasLoggedInSameEmail) {
+          setActiveTab('home');
+          showToast(`Conectado com Google: ${normEmail}`);
+        }
         localStorage.setItem('contsuite_logged_in', 'true');
+        localStorage.setItem('contsuite_auth_mode', 'google');
         try {
           localStorage.setItem(SESSION_USER_KEY, JSON.stringify(syncedUser));
         } catch {}
@@ -788,8 +840,6 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ user: syncedUser, company: matchedCompany }),
         }).catch(() => {});
-
-        showToast(`Conectado com Google: ${normEmail}`);
       }
     });
 
@@ -801,6 +851,10 @@ export default function App() {
   const handleLogin = async (email: string) => {
     const normInput = email.toLowerCase().trim();
     masterMirrorSyncedRef.current = null;
+    localStorage.setItem('contsuite_auth_mode', 'email');
+    if (firebaseUser?.email && firebaseUser.email.toLowerCase().trim() !== normInput) {
+      logoutFirebase().catch(() => {});
+    }
 
     // 1. Try backend authentication (supports email, username, or company name like SSCONT)
     try {
@@ -967,6 +1021,7 @@ export default function App() {
   // Google Login / Logout handlers
   const handleGoogleSignIn = async () => {
     try {
+      localStorage.setItem('contsuite_auth_mode', 'google');
       await loginWithGoogle();
       setIsAuthenticated(true);
       setActiveTab('home');
@@ -994,6 +1049,7 @@ export default function App() {
     setStatements([]);
     setDepreciationSummary(null);
     localStorage.removeItem('contsuite_logged_in');
+    localStorage.removeItem('contsuite_auth_mode');
     localStorage.removeItem(SESSION_USER_KEY);
     localStorage.removeItem(SESSION_COMPANY_KEY);
     localStorage.removeItem('contsuite_cached_companies');

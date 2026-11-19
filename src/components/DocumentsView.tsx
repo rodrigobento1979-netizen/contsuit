@@ -51,6 +51,7 @@ import {
   fetchStatementsFromFirestore,
   subscribeDocumentsFromFirestore,
   fetchDocumentBinaryFromFirestore,
+  subscribeToAuth,
 } from '../firebase/service';
 import {
   base64ToBlob,
@@ -332,9 +333,17 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
   const [documents, setDocuments] = useState<CompanyDocument[]>([]);
   const [loading, setLoading] = useState(true);
+  const [firebaseUid, setFirebaseUid] = useState<string>('');
   const [viewMode, setViewMode] = useState<ViewMode>('kanban_category');
   const [explorerCompanyId, setExplorerCompanyId] = useState<string | null>(null);
   const [explorerCategory, setExplorerCategory] = useState<DocumentCategory | null>(null);
+
+  useEffect(() => {
+    const unsub = subscribeToAuth((fbUser) => {
+      setFirebaseUid(fbUser?.uid || '');
+    });
+    return () => unsub();
+  }, []);
 
   // Filters
   const [searchTerm, setSearchTerm] = useState('');
@@ -482,7 +491,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       localStorage.setItem(cacheKey, JSON.stringify(merged.map(({ fileBase64, ...rest }) => rest)));
     } catch {}
 
-    // Garante que documentos carregados do Firestore (ex: enviados pelo celular via login Google) também fiquem espelhados no db.json para login por email/usuário
+    // Espelhamento bidirecional Firestore <-> db.json
     if (firestoreDocs.length > 0) {
       const apiDocIds = new Set(apiDocs.map((d) => d.id));
       const missingInApi = merged.filter((d) => !apiDocIds.has(d.id));
@@ -497,8 +506,16 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       }
     }
 
+    if (firebaseUid && merged.length > 0) {
+      const fDocIds = new Set(firestoreDocs.map((d) => d.id));
+      const missingInFirestore = merged.filter((d) => !fDocIds.has(d.id));
+      missingInFirestore.forEach((d) => {
+        saveDocumentToFirestore(currentCompany.id, d).catch(() => {});
+      });
+    }
+
     setLoading(false);
-  }, [currentCompany.id, cacheKey, mergeDocsIntoState]);
+  }, [currentCompany.id, firebaseUid, cacheKey, mergeDocsIntoState]);
 
   useEffect(() => {
     setExplorerCompanyId(null);
@@ -552,7 +569,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       document.removeEventListener('visibilitychange', handleFocusOrVisibility);
       window.clearInterval(pollInterval);
     };
-  }, [currentCompany.id, loadDocuments, mergeDocsIntoState]);
+  }, [currentCompany.id, firebaseUid, loadDocuments, mergeDocsIntoState]);
 
   useEffect(() => {
     if (lastInboxSyncEventTs > 0) {

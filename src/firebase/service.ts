@@ -26,6 +26,27 @@ import {
 import { User, Company, Asset, ConvertedStatement, CompanyDocument } from '../types';
 
 /**
+ * Remove recursivamente propriedades undefined (Firestore rejeita undefined inclusive dentro de arrays/objetos aninhados)
+ */
+function stripUndefinedDeep<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => item !== undefined)
+      .map((item) => stripUndefinedDeep(item)) as unknown as T;
+  }
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    const out: Record<string, any> = {};
+    Object.entries(value as Record<string, any>).forEach(([k, v]) => {
+      if (v !== undefined) {
+        out[k] = stripUndefinedDeep(v);
+      }
+    });
+    return out as T;
+  }
+  return value;
+}
+
+/**
  * Realiza login com Google via Popup (recomendado para o ambiente de iframe)
  */
 export async function loginWithGoogle(): Promise<FirebaseUser> {
@@ -82,7 +103,7 @@ export async function saveCompanyToFirestore(company: Company): Promise<void> {
   if (!auth.currentUser) return;
   const path = `companies/${company.id}`;
   try {
-    await setDoc(doc(db, 'companies', company.id), company, { merge: true });
+    await setDoc(doc(db, 'companies', company.id), stripUndefinedDeep(company), { merge: true });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -111,7 +132,7 @@ export async function saveAssetToFirestore(companyId: string, asset: Asset): Pro
   if (!auth.currentUser || !companyId) return;
   const path = `companies/${companyId}/assets/${asset.id}`;
   try {
-    await setDoc(doc(db, 'companies', companyId, 'assets', asset.id), asset, { merge: true });
+    await setDoc(doc(db, 'companies', companyId, 'assets', asset.id), stripUndefinedDeep(asset), { merge: true });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -151,16 +172,11 @@ export async function saveStatementToFirestore(companyId: string, statement: Con
   const statementId = statement.id || 'stmt-' + Date.now().toString(36);
   const path = `companies/${companyId}/statements/${statementId}`;
   const { fileBase64, ...rest } = statement;
-  const cleanPayload: Record<string, any> = {};
-  Object.entries({
+  const cleanPayload = stripUndefinedDeep({
     ...rest,
     id: statementId,
     companyId,
     hasOriginalFile: Boolean(fileBase64 || rest.hasOriginalFile || rest.sourceDocId),
-  }).forEach(([key, val]) => {
-    if (val !== undefined) {
-      cleanPayload[key] = val;
-    }
   });
   try {
     await setDoc(doc(db, 'companies', companyId, 'statements', statementId), cleanPayload, { merge: true });
@@ -204,7 +220,7 @@ export async function syncUserToFirestore(user: User): Promise<void> {
   if (!auth.currentUser) return;
   const path = `users/${user.id}`;
   try {
-    await setDoc(doc(db, 'users', user.id), user, { merge: true });
+    await setDoc(doc(db, 'users', user.id), stripUndefinedDeep(user), { merge: true });
 
     // Apenas o Administrador Master é registrado em /admins para validação de regras globais
     const normEmail = (user.email || '').toLowerCase().trim();
@@ -387,7 +403,7 @@ export async function saveDocumentToFirestore(companyId: string, documentData: C
   }
 
   try {
-    await setDoc(doc(db, 'companies', companyId, 'documents', documentData.id), cleanPayload, { merge: true });
+    await setDoc(doc(db, 'companies', companyId, 'documents', documentData.id), stripUndefinedDeep(cleanPayload), { merge: true });
     if (rawB64) {
       await saveDocumentBinaryToFirestore(companyId, documentData.id, rawB64, cleanPayload.mimeType);
     }
