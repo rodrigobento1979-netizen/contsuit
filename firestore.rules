@@ -85,6 +85,18 @@ service cloud.firestore {
         (!('sourceGroupLabel' in data) || (data.sourceGroupLabel is string && data.sourceGroupLabel.size() <= 120));
     }
 
+    function isValidDocumentChunk(data, companyId, documentId) {
+      return data.keys().hasAll(['id', 'companyId', 'documentId', 'index', 'totalChunks', 'mimeType', 'data']) &&
+        data.keys().hasOnly(['id', 'companyId', 'documentId', 'index', 'totalChunks', 'mimeType', 'data']) &&
+        data.id is string && isValidId(data.id) &&
+        data.companyId == companyId &&
+        data.documentId == documentId &&
+        data.index is int && data.index >= 0 && data.index < 50 &&
+        data.totalChunks is int && data.totalChunks >= 1 && data.totalChunks <= 50 &&
+        data.mimeType is string && data.mimeType.size() > 0 && data.mimeType.size() <= 120 &&
+        data.data is string && data.data.size() > 0 && data.data.size() <= 750000;
+    }
+
     // Companies collection
     match /companies/{companyId} {
       allow read: if isSignedIn();
@@ -114,6 +126,14 @@ service cloud.firestore {
         allow create: if isSignedIn() && isValidId(documentId) && isValidCompanyDocument(request.resource.data, companyId) && (isCompanyUser(companyId) || isAdmin());
         allow update: if isSignedIn() && isValidId(documentId) && isValidCompanyDocument(request.resource.data, companyId) && request.resource.data.id == resource.data.id && request.resource.data.companyId == resource.data.companyId && (isCompanyUser(companyId) || isAdmin());
         allow delete: if isSignedIn() && isValidId(documentId) && (isCompanyUser(companyId) || isAdmin());
+
+        // Document binary chunks for cross-device PDF preview sync
+        match /chunks/{chunkId} {
+          allow read: if isSignedIn() && (isCompanyUser(companyId) || isAdmin());
+          allow create: if isSignedIn() && isValidId(chunkId) && isValidDocumentChunk(request.resource.data, companyId, documentId) && (isCompanyUser(companyId) || isAdmin());
+          allow update: if isSignedIn() && isValidId(chunkId) && isValidDocumentChunk(request.resource.data, companyId, documentId) && request.resource.data.id == resource.data.id && (isCompanyUser(companyId) || isAdmin());
+          allow delete: if isSignedIn() && isValidId(chunkId) && (isCompanyUser(companyId) || isAdmin());
+        }
       }
     }
   }

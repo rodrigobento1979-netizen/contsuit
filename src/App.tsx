@@ -19,7 +19,7 @@ import { HelpCenterModal } from './components/HelpCenterModal';
 import { DocumentScannerModal } from './components/DocumentScannerModal';
 import { AssetSmartImportModal } from './components/AssetSmartImportModal';
 import { OfxAgentProvider } from './context/OfxAgentContext';
-import { User, Company, Asset, DepreciationSummary, ConvertedStatement } from './types';
+import { User, Company, CompanyDocument, Asset, DepreciationSummary, ConvertedStatement } from './types';
 import { isMasterUser, filterCompaniesForUser } from './utils/auth';
 import { Loader2, AlertCircle, CheckCircle } from 'lucide-react';
 import { 
@@ -97,6 +97,7 @@ export default function App() {
   const [isScannerModalOpen, setIsScannerModalOpen] = useState(false);
   const [isAssetSmartImportOpen, setIsAssetSmartImportOpen] = useState(false);
   const [pendingOfxFile, setPendingOfxFile] = useState<File | null>(null);
+  const [pendingScannedDoc, setPendingScannedDoc] = useState<CompanyDocument | null>(null);
 
   const handleOpenCompanyModalWithPrefill = (prefill: { name?: string; cnpj?: string; fantasyName?: string }) => {
     setCompanyToEdit(null);
@@ -209,7 +210,14 @@ export default function App() {
       console.warn('Could not load users/companies from Firestore:', fErr);
     }
 
-    // Merge Companies from API, Firestore, and LocalStorage (cache only for Master)
+    // Read cached users early so Master can also recover any company linked inside user records
+    let localUsers: User[] = [];
+    try {
+      const cached = localStorage.getItem('contsuite_cached_users');
+      if (cached) localUsers = JSON.parse(cached);
+    } catch {}
+
+    // Merge Companies from API, Firestore, user records, and LocalStorage (cache only for Master)
     let localComps: Company[] = [];
     if (canViewAllCompanies) {
       try {
@@ -218,9 +226,15 @@ export default function App() {
       } catch {}
     }
 
+    const userEmbeddedCompanies: Company[] = canViewAllCompanies
+      ? [...apiUsers, ...firestoreUsers, ...localUsers]
+          .map((u: any) => u?.company)
+          .filter((c: any): c is Company => Boolean(c && c.id))
+      : [];
+
     const compMap = new Map<string, Company>();
     const rawCompanySources = canViewAllCompanies
-      ? [...localComps, ...firestoreCompanies, ...apiComps]
+      ? [...localComps, ...userEmbeddedCompanies, ...firestoreCompanies, ...apiComps]
       : filterCompaniesForUser([...firestoreCompanies, ...apiComps], currentUser);
 
     rawCompanySources.forEach(c => {
@@ -279,12 +293,6 @@ export default function App() {
     }
 
     // Merge Users from API, Firestore, and LocalStorage
-    let localUsers: User[] = [];
-    try {
-      const cached = localStorage.getItem('contsuite_cached_users');
-      if (cached) localUsers = JSON.parse(cached);
-    } catch {}
-
     const userMap = new Map<string, any>();
     [...apiUsers, ...firestoreUsers, ...localUsers].forEach(u => {
       if (u && (u.id || u.email)) {
@@ -447,15 +455,22 @@ export default function App() {
     } catch {}
   }, []);
 
-  // Initial load
+  const initialLoadDoneRef = useRef(false);
+
+  // Initial load & refresh whenever auth state or currentUser profile changes
   useEffect(() => {
     const init = async () => {
-      setLoading(true);
+      if (!initialLoadDoneRef.current) {
+        setLoading(true);
+      }
       await fetchCompaniesAndUsers();
-      setLoading(false);
+      if (!initialLoadDoneRef.current) {
+        initialLoadDoneRef.current = true;
+        setLoading(false);
+      }
     };
     init();
-  }, [fetchCompaniesAndUsers]);
+  }, [fetchCompaniesAndUsers, isAuthenticated]);
 
   // Listen to Firebase Authentication state once on mount
   useEffect(() => {
@@ -1040,6 +1055,7 @@ export default function App() {
             currentUser={currentUser}
             currentCompany={currentCompany}
             allCompanies={allCompanies}
+            allUsers={allUsers}
             activeTab={activeTab}
             onSwitchCompany={handleSwitchCompany}
             onOpenUserModal={() => setIsUserModalOpen(true)}
@@ -1135,6 +1151,9 @@ export default function App() {
                   currentUser={currentUser}
                   currentCompany={currentCompany}
                   allCompanies={allCompanies}
+                  allUsers={allUsers}
+                  pendingPreviewDoc={pendingScannedDoc}
+                  onConsumePendingPreviewDoc={() => setPendingScannedDoc(null)}
                   onSelectCompany={handleSwitchCompany}
                   onOpenInOfxConverter={(file) => {
                     setPendingOfxFile(file);
@@ -1186,6 +1205,10 @@ export default function App() {
                   onSwitchUserContext={(userId) => {
                     const targetUser = allUsers.find(u => u.id === userId);
                     if (targetUser) handleSwitchUser(targetUser);
+                  }}
+                  onNavigateCompany={(comp, tab) => {
+                    handleSwitchCompany(comp.id);
+                    setActiveTab(tab || 'companies');
                   }}
                   onRefreshUsers={fetchCompaniesAndUsers}
                   onUpdateUserStatus={handleUpdateUserStatus}
@@ -1263,6 +1286,7 @@ export default function App() {
         currentCompany={currentCompany}
         showToast={showToast}
         onDocumentSaved={(doc) => {
+          setPendingScannedDoc(doc);
           if (activeTab !== 'documents') setActiveTab('documents');
         }}
       />

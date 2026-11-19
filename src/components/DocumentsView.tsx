@@ -50,6 +50,7 @@ import {
   deleteDocumentFromFirestore,
   fetchStatementsFromFirestore,
   subscribeDocumentsFromFirestore,
+  fetchDocumentBinaryFromFirestore,
 } from '../firebase/service';
 import {
   base64ToBlob,
@@ -68,6 +69,9 @@ interface DocumentsViewProps {
   currentUser: User;
   currentCompany: Company;
   allCompanies: Company[];
+  allUsers?: (User & { company?: Company })[];
+  pendingPreviewDoc?: CompanyDocument | null;
+  onConsumePendingPreviewDoc?: () => void;
   onSelectCompany: (companyId: string) => void;
   onOpenInOfxConverter?: (file: File) => void;
   showToast: (text: string, type?: 'success' | 'error') => void;
@@ -289,6 +293,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   currentUser,
   currentCompany,
   allCompanies,
+  allUsers = [],
+  pendingPreviewDoc,
+  onConsumePendingPreviewDoc,
   onSelectCompany,
   onOpenInOfxConverter,
   showToast,
@@ -390,13 +397,15 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             const nextDoc: CompanyDocument = {
               ...existing,
               ...d,
-              hasOriginalFile: Boolean(d.hasOriginalFile || existing?.hasOriginalFile),
+              fileBase64: d.fileBase64 || existing?.fileBase64,
+              hasOriginalFile: Boolean(d.fileBase64 || existing?.fileBase64 || d.hasOriginalFile || existing?.hasOriginalFile),
             };
             if (
               !existing ||
               existing.updatedAt !== nextDoc.updatedAt ||
               existing.status !== nextDoc.status ||
-              existing.category !== nextDoc.category
+              existing.category !== nextDoc.category ||
+              (!existing.fileBase64 && Boolean(nextDoc.fileBase64))
             ) {
               changed = true;
             }
@@ -653,7 +662,10 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       savedDoc.hasOriginalFile = true;
 
       try {
-        await saveDocumentToFirestore(currentCompany.id, savedDoc);
+        await saveDocumentToFirestore(currentCompany.id, {
+          ...savedDoc,
+          fileBase64: binaryBase64,
+        });
       } catch (fErr) {
         console.warn('Firestore save document warning:', fErr);
       }
@@ -936,7 +948,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     return 'image/jpeg';
   };
 
-  // Fetch file binary (In-memory -> IndexedDB -> API)
+  // Fetch file binary (In-memory -> IndexedDB -> API -> Firestore binary chunks)
   const resolveFileBase64 = async (docItem: CompanyDocument): Promise<string | null> => {
     if (docItem.fileBase64) return cleanBase64(docItem.fileBase64);
     const localB64 = await getBlobFromIdb(docItem.id);
@@ -953,6 +965,17 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         }
       }
     } catch {}
+
+    try {
+      const targetCompanyId = docItem.companyId || currentCompany.id;
+      const cloudB64 = await fetchDocumentBinaryFromFirestore(targetCompanyId, docItem.id);
+      if (cloudB64) {
+        const cleaned = cleanBase64(cloudB64);
+        await saveBlobToIdb(docItem.id, cleaned);
+        return cleaned;
+      }
+    } catch {}
+
     return null;
   };
 
@@ -1023,6 +1046,16 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     applyPreviewContent(docItem, b64);
     setLoadingPreview(false);
   };
+
+  // Automatically insert and open freshly scanned document PDF when redirected from Digitalizar
+  useEffect(() => {
+    if (pendingPreviewDoc && pendingPreviewDoc.companyId === currentCompany.id) {
+      mergeDocsIntoState([pendingPreviewDoc]);
+      void openDetailModal(pendingPreviewDoc);
+      onConsumePendingPreviewDoc?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingPreviewDoc, currentCompany.id]);
 
   const handleReattachFile = async (docItem: CompanyDocument, file: File) => {
     try {
@@ -2088,7 +2121,16 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
                 {visibleCompanies.map((comp) => {
-                  const folderLabel = `${comp.fantasyName || comp.name} - ${comp.cnpj}`;
+                  const linkedUsers = allUsers.filter(
+                    (u) =>
+                      u.companyId === comp.id ||
+                      (comp.createdByEmail && u.email?.toLowerCase().trim() === comp.createdByEmail.toLowerCase().trim())
+                  );
+                  const ownerLabel =
+                    linkedUsers[0]?.name ||
+                    comp.createdByName ||
+                    comp.createdByEmail ||
+                    (comp.id === 'comp-master' ? 'Rodrigo Bento (Master)' : '');
                   return (
                     <div
                       key={comp.id}
@@ -2112,6 +2154,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                         <p className="text-xs text-slate-500 font-mono">
                           {comp.cnpj}
                         </p>
+                        {isMaster && ownerLabel && (
+                          <p className="text-[10px] text-indigo-700 font-semibold truncate">
+                            Usuário: {ownerLabel}
+                          </p>
+                        )}
                         <div className="pt-2 flex items-center justify-between text-[11px] text-slate-400">
                           <span>Sistema: {comp.accountingSystem.toUpperCase()}</span>
                           <span className="text-teal-700 font-bold group-hover:underline flex items-center gap-1">

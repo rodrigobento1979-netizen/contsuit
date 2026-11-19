@@ -84,13 +84,15 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
         container.innerHTML = '';
 
         // Compute fit-width scale from page 1 when manualScale is null
-        let renderScale = manualScale ?? 1.15;
-        if (manualScale === null && scrollAreaRef.current && pdfDoc.numPages >= 1) {
+        let renderScale = manualScale ?? 1.0;
+        if (manualScale === null && pdfDoc.numPages >= 1) {
+          await new Promise<void>((r) => requestAnimationFrame(() => r()));
+          const areaWidth = scrollAreaRef.current?.clientWidth || 520;
           const firstPage = await pdfDoc.getPage(1);
           const baseVp = firstPage.getViewport({ scale: 1 });
-          const availWidth = Math.max(280, scrollAreaRef.current.clientWidth - 40);
+          const availWidth = Math.max(240, areaWidth - 36);
           if (baseVp.width > 0) {
-            renderScale = Math.min(2.0, Math.max(0.65, Number((availWidth / baseVp.width).toFixed(2))));
+            renderScale = Math.min(2.0, Math.max(0.2, Number((availWidth / baseVp.width).toFixed(2))));
           }
           firstPage.cleanup?.();
         }
@@ -108,7 +110,7 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
 
           const pageWrapper = document.createElement('div');
           pageWrapper.className =
-            'mb-4 bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden mx-auto';
+            'mb-4 bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden mx-auto max-w-full';
           pageWrapper.style.width = `${Math.floor(viewport.width)}px`;
 
           const pageHeader = document.createElement('div');
@@ -122,6 +124,8 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
           canvas.height = Math.floor(viewport.height * outputScale);
           canvas.style.width = `${Math.floor(viewport.width)}px`;
           canvas.style.height = `${Math.floor(viewport.height)}px`;
+          canvas.style.maxWidth = manualScale === null ? '100%' : 'none';
+          canvas.style.height = manualScale === null ? 'auto' : `${Math.floor(viewport.height)}px`;
           canvas.style.display = 'block';
 
           const ctx = canvas.getContext('2d');
@@ -183,7 +187,7 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
           <button
             type="button"
             onClick={() =>
-              setManualScale(Math.max(0.5, Number((activeScale - 0.2).toFixed(2))))
+              setManualScale(Math.max(0.25, Number((activeScale - 0.15).toFixed(2))))
             }
             title="Diminuir zoom"
             className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 cursor-pointer"
@@ -196,7 +200,7 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
           <button
             type="button"
             onClick={() =>
-              setManualScale(Math.min(2.6, Number((activeScale + 0.2).toFixed(2))))
+              setManualScale(Math.min(2.6, Number((activeScale + 0.15).toFixed(2))))
             }
             title="Aumentar zoom"
             className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 cursor-pointer"
@@ -240,7 +244,7 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
       {/* Canvas Container */}
       <div
         ref={scrollAreaRef}
-        className={`${maxHeightClass} overflow-auto p-3 sm:p-4 bg-slate-200/70 relative`}
+        className={`${maxHeightClass} overflow-auto p-3 sm:p-4 bg-slate-200/70 relative flex flex-col`}
       >
         {loading && (
           <div className="flex flex-col items-center justify-center py-12 text-slate-600 gap-2 min-h-[280px]">
@@ -250,24 +254,38 @@ export const PdfCanvasViewer: React.FC<PdfCanvasViewerProps> = ({
         )}
 
         {error && !loading && (
-          <div className="bg-white border border-rose-200 rounded-xl p-5 text-center max-w-md mx-auto my-6">
-            <AlertCircle className="w-7 h-7 text-rose-500 mx-auto mb-2" />
-            <p className="text-xs font-bold text-slate-800 mb-1">Não foi possível pré-visualizar no canvas</p>
-            <p className="text-[11px] text-slate-500 mb-3">{error}</p>
-            {blobUrl && (
-              <a
-                href={blobUrl}
-                download={fileName}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#004d40] text-white text-xs font-bold"
-              >
-                <Download className="w-3.5 h-3.5" />
-                Baixar PDF Original
-              </a>
-            )}
-          </div>
+          blobUrl ? (
+            <div className="flex-1 flex flex-col gap-2 min-h-[360px]">
+              <iframe
+                src={blobUrl}
+                title={fileName}
+                className="w-full flex-1 min-h-[340px] rounded-lg bg-white border border-slate-300"
+              />
+              <div className="flex items-center justify-between gap-2 px-2 py-1 bg-white rounded-lg border border-slate-200 text-[11px] text-slate-600">
+                <span>Visualizador alternativo ativado</span>
+                <a
+                  href={blobUrl}
+                  download={fileName}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-[#004d40] text-white font-bold"
+                >
+                  <Download className="w-3 h-3" />
+                  Baixar PDF
+                </a>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-white border border-rose-200 rounded-xl p-5 text-center max-w-md mx-auto my-6">
+              <AlertCircle className="w-7 h-7 text-rose-500 mx-auto mb-2" />
+              <p className="text-xs font-bold text-slate-800 mb-1">Não foi possível pré-visualizar no canvas</p>
+              <p className="text-[11px] text-slate-500 mb-3">{error}</p>
+            </div>
+          )
         )}
 
-        <div ref={containerRef} className={loading || error ? 'hidden' : 'min-w-full w-max'} />
+        <div
+          ref={containerRef}
+          className={loading || error ? 'hidden' : manualScale === null ? 'w-full' : 'min-w-full w-max'}
+        />
       </div>
     </div>
   );

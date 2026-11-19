@@ -15,6 +15,7 @@ interface HeaderProps {
   currentUser: User;
   currentCompany?: Company;
   allCompanies: Company[];
+  allUsers?: (User & { company?: Company })[];
   activeTab: 'home' | 'assets' | 'companies' | 'accounts' | 'ofx' | 'documents' | 'fees' | 'database' | 'admin' | 'depreciation';
   onSwitchCompany: (companyId: string) => void;
   onOpenUserModal: () => void;
@@ -26,6 +27,7 @@ export const Header: React.FC<HeaderProps> = ({
   currentUser,
   currentCompany,
   allCompanies,
+  allUsers = [],
   activeTab,
   onSwitchCompany,
   onOpenUserModal,
@@ -33,6 +35,16 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleMobileMenu,
 }) => {
   const isMaster = isMasterUser(currentUser);
+
+  const getCompanyOwnerTag = (c: Company): string => {
+    const linked = allUsers.find(
+      (u) =>
+        u.companyId === c.id ||
+        (c.createdByEmail && u.email?.toLowerCase().trim() === c.createdByEmail.toLowerCase().trim())
+    );
+    const label = linked?.name || c.createdByName || c.createdByEmail;
+    return label ? ` • ${label}` : '';
+  };
 
   const tabTitles: Record<string, { title: string; subtitle: string }> = {
     home: { title: 'Visão Geral & Assistente', subtitle: 'Mostre-me como fazer rotinas contábeis' },
@@ -86,7 +98,7 @@ export const Header: React.FC<HeaderProps> = ({
           {isMaster ? (
             <div
               className="flex items-center gap-1.5 bg-black/20 px-2.5 py-1 rounded-xl border border-white/15"
-              title={`Acesso amplo Administrador Master: ${allCompanies.length} empresas disponíveis`}
+              title={`Acesso amplo Administrador Master: ${allCompanies.length} empresas de todos os usuários`}
             >
               <Building2 className="w-3.5 h-3.5 text-[#80cbc4]" />
               <label htmlFor="top-company-select" className="text-[#e0f2f1] font-medium hidden md:inline text-[11px]">
@@ -96,11 +108,11 @@ export const Header: React.FC<HeaderProps> = ({
                 id="top-company-select"
                 value={currentCompany?.id || ''}
                 onChange={(e) => onSwitchCompany(e.target.value)}
-                className="bg-[#004d40] text-white font-bold border border-[#00bfa5]/40 rounded-lg px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-[#80cbc4] cursor-pointer max-w-[210px]"
+                className="bg-[#004d40] text-white font-bold border border-[#00bfa5]/40 rounded-lg px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-[#80cbc4] cursor-pointer max-w-[240px]"
               >
                 {allCompanies.map((c) => (
                   <option key={c.id} value={c.id} className="bg-slate-900 text-white">
-                    {c.fantasyName || c.name}
+                    {c.fantasyName || c.name}{getCompanyOwnerTag(c)}
                   </option>
                 ))}
               </select>

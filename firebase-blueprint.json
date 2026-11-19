@@ -359,6 +359,40 @@
         }
       },
       "required": ["companyId", "fileName", "mimeType", "fileSize", "category", "status", "competenceMonth", "aiClassified"]
+    },
+    "CompanyDocumentChunk": {
+      "title": "CompanyDocumentChunk",
+      "description": "Bloco binário (Base64) do arquivo original para sincronização entre dispositivos",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "companyId": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "documentId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "index": {
+          "type": "integer"
+        },
+        "totalChunks": {
+          "type": "integer"
+        },
+        "mimeType": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "data": {
+          "type": "string",
+          "maxLength": 750000
+        }
+      },
+      "required": ["id", "companyId", "documentId", "index", "totalChunks", "mimeType", "data"]
     }
   },
   "firestore": {
@@ -385,6 +419,10 @@
     "/companies/{companyId}/documents/{documentId}": {
       "schema": "CompanyDocument",
       "description": "Documentos contábeis classificados por tipo no módulo Arquivos"
+    },
+    "/companies/{companyId}/documents/{documentId}/chunks/{chunkId}": {
+      "schema": "CompanyDocumentChunk",
+      "description": "Blocos binários do documento contábil para pré-visualização sincronizada entre dispositivos"
     }
   }
 }

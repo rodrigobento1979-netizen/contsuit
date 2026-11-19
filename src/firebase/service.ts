@@ -248,27 +248,149 @@ export async function fetchDocumentsFromFirestore(companyId: string): Promise<Co
   }
 }
 
+const ALLOWED_DOC_KEYS = [
+  'id',
+  'companyId',
+  'fileName',
+  'mimeType',
+  'fileSize',
+  'category',
+  'status',
+  'competenceMonth',
+  'documentDate',
+  'issuerOrBank',
+  'documentNumber',
+  'amount',
+  'detectedCnpj',
+  'summary',
+  'aiClassified',
+  'confidence',
+  'notes',
+  'uploadedBy',
+  'uploadedAt',
+  'updatedAt',
+  'ofxStatus',
+  'ofxStatementId',
+  'ofxError',
+  'sourceGroupLabel',
+] as const;
+
+export async function saveDocumentBinaryToFirestore(
+  companyId: string,
+  documentId: string,
+  base64Data: string,
+  mimeType: string = 'application/pdf'
+): Promise<void> {
+  if (!auth.currentUser || !companyId || !documentId || !base64Data) return;
+  const cleanB64 = base64Data.replace(/^data:[^;]+;base64,/i, '').replace(/\s/g, '');
+  if (!cleanB64) return;
+
+  const CHUNK_SIZE = 600000;
+  const totalChunks = Math.ceil(cleanB64.length / CHUNK_SIZE);
+  if (totalChunks <= 0 || totalChunks > 40) return;
+
+  try {
+    for (let i = 0; i < totalChunks; i++) {
+      const chunkId = `chunk-${i}`;
+      const slice = cleanB64.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+      await setDoc(
+        doc(db, 'companies', companyId, 'documents', documentId, 'chunks', chunkId),
+        {
+          id: chunkId,
+          companyId: String(companyId).slice(0, 100),
+          documentId: String(documentId).slice(0, 128),
+          index: i,
+          totalChunks,
+          mimeType: String(mimeType || 'application/pdf').slice(0, 120),
+          data: slice,
+        }
+      );
+    }
+  } catch (error) {
+    console.warn('Firestore save binary chunk warning:', error);
+  }
+}
+
+export async function fetchDocumentBinaryFromFirestore(
+  companyId: string,
+  documentId: string
+): Promise<string | null> {
+  if (!auth.currentUser || !companyId || !documentId) return null;
+  try {
+    const snap = await getDocs(
+      collection(db, 'companies', companyId, 'documents', documentId, 'chunks')
+    );
+    if (snap.empty) return null;
+    const chunks: { index: number; data: string }[] = [];
+    snap.forEach((d) => {
+      const val = d.data() as any;
+      if (typeof val?.index === 'number' && typeof val?.data === 'string') {
+        chunks.push({ index: val.index, data: val.data });
+      }
+    });
+    if (chunks.length === 0) return null;
+    chunks.sort((a, b) => a.index - b.index);
+    return chunks.map((c) => c.data).join('');
+  } catch (error) {
+    console.warn('Firestore fetch binary chunk warning:', error);
+    return null;
+  }
+}
+
 export async function saveDocumentToFirestore(companyId: string, documentData: CompanyDocument): Promise<void> {
   if (!auth.currentUser || !companyId || !documentData?.id) return;
   const path = `companies/${companyId}/documents/${documentData.id}`;
-  // Strip heavy base64 binary to respect Firestore 1MB document limit
-  const { fileBase64, hasOriginalFile, ...metadataOnly } = documentData;
-  const cleanPayload: Record<string, any> = {};
-  Object.entries({
-    ...metadataOnly,
-    companyId,
-    fileName: String(metadataOnly.fileName || '').slice(0, 200),
-    mimeType: String(metadataOnly.mimeType || 'application/octet-stream').slice(0, 120),
-    fileSize: Number(metadataOnly.fileSize || 0),
-    competenceMonth: String(metadataOnly.competenceMonth || new Date().toISOString().slice(0, 7)).slice(0, 7),
-    aiClassified: Boolean(metadataOnly.aiClassified),
-  }).forEach(([key, val]) => {
-    if (val !== undefined) {
+  const rawB64 = documentData.fileBase64;
+  const cleanPayload: Record<string, any> = {
+    id: String(documentData.id).slice(0, 128),
+    companyId: String(companyId).slice(0, 100),
+    fileName: String(documentData.fileName || 'documento.pdf').slice(0, 200),
+    mimeType: String(documentData.mimeType || 'application/octet-stream').slice(0, 120),
+    fileSize: Math.max(0, Math.round(Number(documentData.fileSize || 0))),
+    category: documentData.category || 'outro',
+    status: documentData.status || 'pendente',
+    competenceMonth: String(documentData.competenceMonth || new Date().toISOString().slice(0, 7)).slice(0, 7),
+    aiClassified: Boolean(documentData.aiClassified),
+  };
+
+  for (const key of ALLOWED_DOC_KEYS) {
+    if (cleanPayload[key] !== undefined) continue;
+    const val = (documentData as any)[key];
+    if (val === undefined || val === null || val === '') continue;
+    if (key === 'confidence') {
+      const num = Math.max(0, Math.min(100, Math.round(Number(val))));
+      if (!isNaN(num)) cleanPayload[key] = num;
+    } else if (key === 'amount') {
+      const num = Number(val);
+      if (!isNaN(num)) cleanPayload[key] = num;
+    } else if (key === 'documentDate') {
+      cleanPayload[key] = String(val).slice(0, 10);
+    } else if (key === 'issuerOrBank' || key === 'sourceGroupLabel') {
+      cleanPayload[key] = String(val).slice(0, 120);
+    } else if (key === 'documentNumber') {
+      cleanPayload[key] = String(val).slice(0, 60);
+    } else if (key === 'detectedCnpj') {
+      cleanPayload[key] = String(val).slice(0, 25);
+    } else if (key === 'summary' || key === 'ofxError') {
+      cleanPayload[key] = String(val).slice(0, 250);
+    } else if (key === 'notes') {
+      cleanPayload[key] = String(val).slice(0, 500);
+    } else if (key === 'uploadedBy') {
+      cleanPayload[key] = String(val).slice(0, 150);
+    } else if (key === 'uploadedAt' || key === 'updatedAt') {
+      cleanPayload[key] = String(val).slice(0, 40);
+    } else if (key === 'ofxStatementId') {
+      cleanPayload[key] = String(val).slice(0, 100);
+    } else {
       cleanPayload[key] = val;
     }
-  });
+  }
+
   try {
     await setDoc(doc(db, 'companies', companyId, 'documents', documentData.id), cleanPayload, { merge: true });
+    if (rawB64) {
+      await saveDocumentBinaryToFirestore(companyId, documentData.id, rawB64, cleanPayload.mimeType);
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -304,5 +426,6 @@ export function subscribeDocumentsFromFirestore(
     }
   );
 }
+
 
 
