@@ -902,11 +902,19 @@ export default function App() {
           const scopedCompanies = isMaster
             ? candidateCompanies
             : filterCompaniesForUser(candidateCompanies, loggedUser);
-          const targetCompany = isMaster
+          let targetCompany = isMaster
             ? data.company || scopedCompanies[0] || currentCompany
-            : scopedCompanies.find(c => c.id === loggedUser.companyId) ||
-              scopedCompanies[0] ||
+            : scopedCompanies.find(c => c.id === loggedUser.companyId && c.id !== 'comp-master') ||
+              scopedCompanies.find(c => c.id !== 'comp-master') ||
               (data.company && data.company.id !== 'comp-master' ? data.company : NEUTRAL_EMPTY_COMPANY);
+
+          if (!isMaster && targetCompany.id === 'comp-master') {
+            const validComp = scopedCompanies.find(c => c.id !== 'comp-master');
+            if (validComp) {
+              targetCompany = validComp;
+              loggedUser.companyId = validComp.id;
+            }
+          }
 
           setCurrentUser(loggedUser);
           setAllCompanies(scopedCompanies);
@@ -1007,9 +1015,16 @@ export default function App() {
       const scopedCompanies = isMaster
         ? compPool
         : filterCompaniesForUser(compPool, activeUser);
-      const comp = isMaster
+      let comp = isMaster
         ? scopedCompanies.find(c => c.id === activeUser.companyId) || scopedCompanies[0]
-        : scopedCompanies.find(c => c.id === activeUser.companyId) || scopedCompanies[0];
+        : scopedCompanies.find(c => c.id === activeUser.companyId && c.id !== 'comp-master') ||
+          scopedCompanies.find(c => c.id !== 'comp-master') ||
+          scopedCompanies[0];
+
+      if (!isMaster && comp?.id === 'comp-master') {
+        const validComp = scopedCompanies.find(c => c.id !== 'comp-master');
+        if (validComp) comp = validComp;
+      }
 
       if (comp && !isMaster) {
         activeUser.companyId = comp.id;

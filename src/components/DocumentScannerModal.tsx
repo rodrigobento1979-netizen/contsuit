@@ -19,6 +19,7 @@ import { Company, CompanyDocument, User } from '../types';
 import { saveDocumentToFirestore } from '../firebase/service';
 import { saveBlobToIdb } from '../utils/fileStorage';
 import { PdfCanvasViewer } from './PdfCanvasViewer';
+import { isMasterUser } from '../utils/auth';
 
 interface DocumentScannerModalProps {
   isOpen: boolean;
@@ -280,8 +281,16 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
       const pdfBytes = await buildPdfFromImages(capturedImages);
       const base64Pdf = uint8ToBase64(pdfBytes);
 
-      // Strictly bound ONLY to the logged-in / active company
-      const lockedCompany = currentCompany;
+      // Strictly bound ONLY to the logged-in / active company (never comp-master for non-master users)
+      const lockedCompany = isMasterUser(currentUser)
+        ? currentCompany
+        : (currentCompany.id && currentCompany.id !== 'comp-master'
+            ? currentCompany
+            : {
+                id: currentUser.companyId || 'comp-fallback',
+                name: currentCompany.name,
+                fantasyName: currentCompany.fantasyName,
+              } as Company);
       const docId = 'doc-scan-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1000);
       const cleanTitle = (documentTitle.trim() || 'Documento_Digitalizado').replace(/\.pdf$/i, '');
       const fileName = `${cleanTitle}.pdf`;
