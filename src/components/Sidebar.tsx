@@ -18,7 +18,9 @@ import {
   Settings,
   Landmark,
   FolderOpen,
-  HelpCircle
+  HelpCircle,
+  Camera,
+  Scan
 } from 'lucide-react';
 import { User, Company } from '../types';
 import { ContSuiteLogo } from './ContSuiteLogo';
@@ -33,6 +35,7 @@ interface SidebarProps {
   onOpenCompanyModal: () => void;
   onOpenUserModal: () => void;
   onOpenHelpModal: () => void;
+  onOpenScanner: () => void;
   onLogout: () => void;
 }
 
@@ -44,6 +47,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenCompanyModal,
   onOpenUserModal,
   onOpenHelpModal,
+  onOpenScanner,
   onLogout,
 }) => {
   const isAdmin = currentUser.role === 'admin';
@@ -105,6 +109,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
             </div>
             {activeTab === 'home' && <ChevronRight className="w-3.5 h-3.5 text-[#a7ffeb] shrink-0" />}
+          </button>
+        </div>
+
+        {/* DIGITALIZAR (Câmera / Scanner - Fora de Ferramentas) */}
+        <div>
+          <button
+            onClick={onOpenScanner}
+            className="w-full text-left px-3 py-2 rounded-xl transition cursor-pointer flex items-center justify-between text-xs font-semibold text-teal-100/90 hover:text-white hover:bg-white/10"
+            title="Digitalizar documento com a câmera e converter em PDF"
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              <Scan className="w-4 h-4 shrink-0 text-teal-300" />
+              <div className="truncate">
+                <span className="block truncate">Digitalizar</span>
+                <span className="text-[10px] opacity-75 font-normal block truncate">
+                  Câmera para PDF
+                </span>
+              </div>
+            </div>
           </button>
         </div>
 
@@ -265,6 +288,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </div>
                 {activeTab === 'documents' && <ChevronRight className="w-3.5 h-3.5 text-[#a7ffeb] shrink-0" />}
               </button>
+
 
               {/* Honorários */}
               <button

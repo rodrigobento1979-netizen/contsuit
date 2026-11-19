@@ -16,6 +16,8 @@ import { CompaniesView } from './components/CompaniesView';
 import { DocumentsView } from './components/DocumentsView';
 import { Sidebar, AppNavTab } from './components/Sidebar';
 import { HelpCenterModal } from './components/HelpCenterModal';
+import { DocumentScannerModal } from './components/DocumentScannerModal';
+import { AssetSmartImportModal } from './components/AssetSmartImportModal';
 import { OfxAgentProvider } from './context/OfxAgentContext';
 import { User, Company, Asset, DepreciationSummary, ConvertedStatement } from './types';
 import { Loader2, AlertCircle, CheckCircle } from 'lucide-react';
@@ -91,6 +93,8 @@ export default function App() {
   const [companyPrefill, setCompanyPrefill] = useState<{ name?: string; cnpj?: string; fantasyName?: string } | null>(null);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
+  const [isScannerModalOpen, setIsScannerModalOpen] = useState(false);
+  const [isAssetSmartImportOpen, setIsAssetSmartImportOpen] = useState(false);
   const [pendingOfxFile, setPendingOfxFile] = useState<File | null>(null);
 
   const handleOpenCompanyModalWithPrefill = (prefill: { name?: string; cnpj?: string; fantasyName?: string }) => {
@@ -968,6 +972,7 @@ export default function App() {
             onOpenCompanyModal={handleOpenNewCompanyModal}
             onOpenUserModal={() => setIsUserModalOpen(true)}
             onOpenHelpModal={() => setIsHelpModalOpen(true)}
+            onOpenScanner={() => setIsScannerModalOpen(true)}
             onLogout={handleLogout}
           />
         </div>
@@ -998,6 +1003,10 @@ export default function App() {
               }}
               onOpenHelpModal={() => {
                 setIsHelpModalOpen(true);
+                setIsMobileSidebarOpen(false);
+              }}
+              onOpenScanner={() => {
+                setIsScannerModalOpen(true);
                 setIsMobileSidebarOpen(false);
               }}
               onLogout={handleLogout}
@@ -1076,6 +1085,7 @@ export default function App() {
                     setAssetToEdit(null);
                     setIsAssetModalOpen(true);
                   }}
+                  onOpenSmartImport={() => setIsAssetSmartImportOpen(true)}
                   onEditAsset={(asset) => {
                     setAssetToEdit(asset);
                     setIsAssetModalOpen(true);
@@ -1182,6 +1192,15 @@ export default function App() {
         company={currentCompany}
       />
 
+      {/* Asset Smart Import Modal */}
+      <AssetSmartImportModal
+        isOpen={isAssetSmartImportOpen}
+        onClose={() => setIsAssetSmartImportOpen(false)}
+        currentCompany={currentCompany}
+        onSaveAsset={handleSaveAsset}
+        showToast={showToast}
+      />
+
       {/* User Profile / Testing Modal */}
       <UserProfileModal
         isOpen={isUserModalOpen}
@@ -1216,6 +1235,20 @@ export default function App() {
         onClose={() => setIsHelpModalOpen(false)}
         onNavigate={(tab) => setActiveTab(tab)}
         isAdmin={currentUser.role === 'admin'}
+      />
+
+      {/* Document Scanner / Camera Modal */}
+      <DocumentScannerModal
+        isOpen={isScannerModalOpen}
+        onClose={() => setIsScannerModalOpen(false)}
+        currentUser={currentUser}
+        currentCompany={currentCompany}
+        allCompanies={allCompanies}
+        onSelectCompany={handleSwitchCompany}
+        showToast={showToast}
+        onDocumentSaved={(doc) => {
+          if (activeTab !== 'documents') setActiveTab('documents');
+        }}
       />
       </div>
     </OfxAgentProvider>

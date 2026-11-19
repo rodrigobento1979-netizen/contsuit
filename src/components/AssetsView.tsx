@@ -29,7 +29,8 @@ import {
   ChevronRight,
   HelpCircle,
   X,
-  Printer
+  Printer,
+  Upload
 } from 'lucide-react';
 import { 
   Asset, 
@@ -44,6 +45,7 @@ interface AssetsViewProps {
   assets: Asset[];
   currentCompany: Company;
   onOpenNewAsset: () => void;
+  onOpenSmartImport: () => void;
   onEditAsset: (asset: Asset) => void;
   onDeleteAsset: (id: string) => Promise<void>;
   onUpdateAssetStatus: (id: string, status: Asset['status'], notes?: string) => Promise<void>;
@@ -55,6 +57,7 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
   assets,
   currentCompany,
   onOpenNewAsset,
+  onOpenSmartImport,
   onEditAsset,
   onDeleteAsset,
   onUpdateAssetStatus,
@@ -295,6 +298,15 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
           >
             <Printer className="w-4 h-4 text-teal-700" />
             <span>Emitir Relatório</span>
+          </button>
+
+          <button
+            onClick={onOpenSmartImport}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs font-bold shadow-2xs transition cursor-pointer"
+            title="Anexar PDF, XLS ou documento do ativo para cadastro assistido por IA"
+          >
+            <Upload className="w-4 h-4 text-[#a7ffeb]" />
+            <span>Anexar Arquivo p/ Cadastro IA</span>
           </button>
 
           <button
