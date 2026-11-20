@@ -20,6 +20,9 @@ import {
   Archive,
   Inbox,
   ShieldCheck,
+  Camera,
+  CheckCircle,
+  Smartphone,
 } from 'lucide-react';
 import { AppNavTab } from './Sidebar';
 
@@ -75,9 +78,9 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
       icon: Landmark,
       title: 'Cadastro de Empresas & Clientes',
       group: 'Cadastros',
-      summary: 'Carteira multiempresa com isolamento de dados e parâmetros de ERP.',
+      summary: 'Carteira multiempresa com isolamento estrito por conta e parâmetros de ERP.',
       bullets: [
-        'Edite empresas já cadastradas para atualizar Razão Social, CNPJ, Telefone e E-mail de contato.',
+        'Cada usuário acessa apenas as empresas cadastradas em sua própria conta (somente Admins Master visualizam toda a carteira).',
         'Suporte aos sistemas contábeis Keevo (Mastermaq), NG/Keevo, Domínio, Questor, Fortes, Alterdata, TOTVS e SCI.',
       ],
     },
@@ -111,25 +114,25 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
       icon: Sparkles,
       title: 'Conversor OFX com Inteligência Artificial',
       group: 'Ferramentas',
-      summary: 'Transforma extratos bancários em PDF, imagem ou texto no padrão OFX 1.02.',
+      summary: 'Converte extratos, notas fiscais e lotes unificados no padrão OFX 1.02.',
       bullets: [
         'Leitura inteligente multi-página em segundo plano: você pode navegar por outras telas e voltar ao progresso.',
-        'Extratos convertidos automaticamente em Arquivos aparecem imediatamente na lista do Conversor OFX.',
-        'Relatório analítico imprimível para conferência de saldos, débitos, créditos e lançamentos.',
+        'Extratos, notas fiscais processadas em Arquivos e lotes unificados aparecem imediatamente na tabela do Conversor OFX.',
+        'Fotos enviadas são convertidas para PDF ultracomprimido antes da leitura e do armazenamento.',
       ],
     },
     {
       id: 'documents',
       tab: 'documents',
       icon: FolderOpen,
-      title: 'Arquivos & Kanban Contábil IA',
+      title: 'Arquivos, Câmera & Kanban Contábil IA',
       group: 'Ferramentas',
-      summary: 'Organização visual por Tipo ou Status com triagem e conversão automatizadas.',
+      summary: 'Digitalização móvel em PDF comprimido, triagem automática e OFX em lote.',
       bullets: [
-        'Botão compacto "Upload" e zona de arrastar/soltar múltiplos arquivos.',
-        'Separação automática de PDFs mistos: extratos e recibos/comprovantes viram cards separados automaticamente.',
-        'Botão Play "Analisar Extratos (OFX)" e "Processar Outros Docs" para extrair dados de notas fiscais, guias e recibos.',
-        'Botão Ver (laranja) com visualização de PDF ampliável, botão Baixar OFX, Refazer, Arquivar e Excluir.',
+        'Digitalização por Câmera ou Upload de fotos: toda foto enviada é convertida automaticamente para PDF ultracomprimido com sincronização imediata.',
+        'Botão Processar / Reprocessar em Notas Fiscais (XML, PDF ou imagem) envia o lançamento automaticamente para o Conversor OFX.',
+        'Seletor circular (radio) nos cards e na lista para selecionar vários arquivos e gerar 1 único arquivo OFX unificado.',
+        'Separação automática de PDFs mistos, visualização ampliada (botão laranja), Baixar OFX, Arquivar e Excluir.',
       ],
     },
     {
@@ -153,6 +156,7 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
       bullets: [
         'Gere cópias de segurança locais a qualquer momento ou restaure backups completos do escritório.',
       ],
+      adminOnly: true,
     },
     {
       id: 'admin',
@@ -169,71 +173,71 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
     },
   ];
 
-  const novedades = [
+  const novidades = [
     {
-      icon: Inbox,
-      badge: 'Novo na v1.0',
-      title: 'Recebimento Automático de Extratos via E-mail',
-      desc: 'Quando um cliente envia extrato ou documento para contsuitesistemas@gmail.com, o sistema importa o anexo automaticamente para Arquivos (vinculando à empresa por e-mail/CNPJ) e gera o OFX.',
+      icon: Camera,
+      badge: 'Novo na v1.1',
+      title: 'Câmera Mobile & PDF Ultracomprimido Automático',
+      desc: 'Toda foto tirada pela câmera ou enviada via upload é redimensionada, contrastada e convertida automaticamente em PDF ultracomprimido (~85 KB/pág.) com sincronização instantânea e botões protegidos das barras do celular.',
     },
     {
       icon: Sparkles,
-      badge: 'IA + Automação',
-      title: 'Separação Automática de PDFs Mistos (Extratos x Recibos)',
-      desc: 'Ao anexar um PDF com extrato bancário misturado com recibos manuais ou comprovantes, a IA separa as páginas e cria cards individuais para cada tipo de documento.',
+      badge: 'Novo na v1.1',
+      title: 'Processar / Reprocessar Notas Fiscais → OFX',
+      desc: 'Ao clicar em Processar ou Reprocessar em Notas Fiscais (XML NF-e/NFS-e/CT-e, PDF ou foto) dentro de Arquivos, o documento é convertido e enviado automaticamente ao Conversor OFX.',
     },
     {
-      icon: Bot,
-      badge: 'Agente OFX',
-      title: 'Sincronização Direta Arquivos → Conversor OFX',
-      desc: 'Todo extrato convertido em Arquivos fica imediatamente disponível no Conversor OFX e com os botões "Baixar OFX" e "Refazer" direto no card.',
+      icon: CheckCircle,
+      badge: 'Novo na v1.1',
+      title: 'Seleção Múltipla (Radio) para OFX Único em Lote',
+      desc: 'Marque múltiplas notas fiscais ou documentos usando o seletor circular (radio) nos cards ou na lista de Arquivos e clique em "Transformar em Único OFX" para consolidar tudo em um só arquivo.',
     },
     {
-      icon: Play,
-      badge: 'Processamento IA',
-      title: 'Botão Play para Notas Fiscais, Guias e Recibos',
-      desc: 'Processe documentos que não são extrato com 1 clique para extrair valor, CNPJ, data, emissor e sugestão de lançamento contábil.',
+      icon: ShieldCheck,
+      badge: 'Novo na v1.1',
+      title: 'Isolamento Estrito por Conta & Experiência Mobile',
+      desc: 'Cada conta enxerga estritamente as empresas e dados cadastrados nela, mantendo a sessão salva ao recarregar. Todas as telas, tabelas e modais foram ajustados para visibilidade completa no celular.',
     },
     {
-      icon: Archive,
-      badge: 'Kanban',
-      title: 'Coluna Concluído / Arquivado & Visualização Ampliada',
-      desc: 'Arquive documentos finalizados na quarta coluna do Kanban, visualize PDFs em tela expandida pelo botão laranja e exclua itens com segurança.',
+      icon: Inbox,
+      badge: 'Automação',
+      title: 'Recebimento Automático de Extratos via E-mail',
+      desc: 'Anexos enviados para contsuitesistemas@gmail.com são importados automaticamente para Arquivos (vinculados por e-mail/CNPJ) com separação IA de PDFs mistos e geração de OFX.',
     },
     {
-      icon: Landmark,
-      badge: 'ERPs & Cadastros',
-      title: 'Sistema Keevo (Mastermaq), Edição de Empresas e Botão Upload',
-      desc: 'Adicionado o ERP Keevo (Mastermaq), campo de e-mail editável nas empresas, notificações automáticas e botão compacto Upload na barra de Arquivos.',
+      icon: Smartphone,
+      badge: 'Layout Mobile',
+      title: 'Navegação & Modais em Tela Cheia Segura',
+      desc: 'Suporte a safe-area em celulares iOS/Android, cabeçalho compacto, pré-visualização de PDF antes de enviar a foto e zero corte de botões na câmera.',
     },
   ];
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5"
+      className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-0 sm:p-5"
       onClick={onClose}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+        className="bg-white rounded-none sm:rounded-2xl max-w-4xl w-full h-[100dvh] sm:h-auto sm:max-h-[90dvh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-200"
       >
         {/* Header */}
-        <div className="bg-gradient-to-r from-[#004d40] via-[#00695c] to-[#00796b] text-white px-5 py-4 flex items-center justify-between gap-3 shrink-0">
+        <div className="bg-gradient-to-r from-[#004d40] via-[#00695c] to-[#00796b] text-white px-4 sm:px-5 py-3.5 sm:py-4 pt-[max(0.85rem,env(safe-area-inset-top))] flex items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-xl bg-amber-400/20 border border-amber-300/40 text-amber-200 flex items-center justify-center shrink-0">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-amber-400/20 border border-amber-300/40 text-amber-200 flex items-center justify-center shrink-0">
               <HelpCircle className="w-5 h-5" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-base sm:text-lg font-extrabold tracking-tight">
+                <h2 className="text-sm sm:text-lg font-extrabold tracking-tight">
                   Central de Ajuda & Manual do Sistema
                 </h2>
                 <span className="px-2 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[10px] font-black tracking-wide uppercase">
-                  Versão 1.0
+                  Versão 1.1
                 </span>
               </div>
-              <p className="text-xs text-teal-100 truncate">
-                Guia completo das funcionalidades, novidades da versão e recebimento automático por e-mail
+              <p className="text-[11px] sm:text-xs text-teal-100 truncate">
+                Guia completo das funcionalidades, novidades da versão 1.1 e recebimento por e-mail
               </p>
             </div>
           </div>
@@ -249,24 +253,24 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
         </div>
 
         {/* Navigation Tabs */}
-        <div className="px-5 pt-3 pb-2 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center gap-2 shrink-0">
+        <div className="px-3.5 sm:px-5 pt-2.5 pb-2 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center gap-2 shrink-0">
           <button
             type="button"
             onClick={() => setActiveTab('novidades')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
               activeTab === 'novidades'
                 ? 'bg-[#00897b] text-white shadow-xs'
                 : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
             }`}
           >
             <Sparkles className="w-3.5 h-3.5" />
-            <span>Novidades (v1.0)</span>
+            <span>Novidades (v1.1)</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveTab('funcoes')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
               activeTab === 'funcoes'
                 ? 'bg-[#00897b] text-white shadow-xs'
                 : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
@@ -279,29 +283,29 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
           <button
             type="button"
             onClick={() => setActiveTab('email_auto')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
               activeTab === 'email_auto'
                 ? 'bg-[#00897b] text-white shadow-xs'
                 : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
             }`}
           >
             <Mail className="w-3.5 h-3.5" />
-            <span>Extratos via E-mail (contsuitesistemas@gmail.com)</span>
+            <span className="truncate max-w-[230px] sm:max-w-none">Extratos via E-mail</span>
           </button>
         </div>
 
         {/* Scrollable Content */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
           {activeTab === 'novidades' && (
             <div className="space-y-4">
               <div className="p-3.5 rounded-xl bg-teal-50 border border-teal-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
                   <h3 className="text-xs sm:text-sm font-bold text-teal-950 flex items-center gap-1.5">
-                    <ShieldCheck className="w-4 h-4 text-teal-700" />
-                    ContSuite Contábil — Release Oficial v1.0
+                    <ShieldCheck className="w-4 h-4 text-teal-700 shrink-0" />
+                    ContSuite Contábil — Release Oficial v1.1
                   </h3>
                   <p className="text-xs text-teal-800 mt-0.5">
-                    Automação completa da entrada de documentos por e-mail ou upload até a geração do OFX e integração patrimonial.
+                    Isolamento estrito por conta, fotos convertidas para PDF ultracomprimido, Notas Fiscais → OFX único em lote e responsividade mobile completa.
                   </p>
                 </div>
                 <button
@@ -315,7 +319,7 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {novedades.map((item, idx) => {
+                {novidades.map((item, idx) => {
                   const Icon = item.icon;
                   return (
                     <div
@@ -343,8 +347,8 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
 
               {/* Quick Icon Legend for Cards in Arquivos */}
               <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
-                <h4 className="text-xs font-bold text-slate-800">Legenda Rápida dos Botões nos Cards de Arquivos</h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-[11px] text-slate-700">
+                <h4 className="text-xs font-bold text-slate-800">Legenda Rápida dos Botões em Arquivos</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 text-[11px] text-slate-700">
                   <div className="flex items-center gap-2 bg-white p-2 rounded-lg border border-slate-200">
                     <span className="p-1 rounded bg-orange-500 text-white shrink-0">
                       <Eye className="w-3 h-3" />
@@ -361,10 +365,22 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
                     <span className="p-1 rounded bg-indigo-600 text-white shrink-0">
                       <Play className="w-3 h-3" />
                     </span>
-                    <span><strong>Play:</strong> Extrair dados com IA</span>
+                    <span><strong>Processar / Play:</strong> Extrai &amp; gera OFX</span>
                   </div>
                   <div className="flex items-center gap-2 bg-white p-2 rounded-lg border border-slate-200">
                     <span className="p-1 rounded bg-teal-600 text-white shrink-0">
+                      <CheckCircle className="w-3 h-3" />
+                    </span>
+                    <span><strong>Seletor Radio:</strong> Unir vários em 1 OFX</span>
+                  </div>
+                  <div className="flex items-center gap-2 bg-white p-2 rounded-lg border border-slate-200">
+                    <span className="p-1 rounded bg-sky-600 text-white shrink-0">
+                      <Camera className="w-3 h-3" />
+                    </span>
+                    <span><strong>Câmera:</strong> Foto → PDF comprimido</span>
+                  </div>
+                  <div className="flex items-center gap-2 bg-white p-2 rounded-lg border border-slate-200">
+                    <span className="p-1 rounded bg-slate-700 text-white shrink-0">
                       <Archive className="w-3 h-3" />
                     </span>
                     <span><strong>Arquivar:</strong> Move p/ Concluído</span>
@@ -436,7 +452,7 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
                   Como funciona o Recebimento Automático (contsuitesistemas@gmail.com)
                 </h3>
                 <p className="leading-relaxed text-teal-900">
-                  O ContSuite v1.0 monitora a caixa de entrada de{' '}
+                  O ContSuite v1.1 monitora a caixa de entrada de{' '}
                   <strong>contsuitesistemas@gmail.com</strong> via protocolo seguro IMAP (SSL porta 993).
                   Assim que o cliente envia um e-mail com extrato bancário, nota fiscal ou recibo em anexo:
                 </p>
@@ -469,7 +485,7 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
                   </span>
                   <h4 className="font-bold text-slate-900">OFX Pronto para Download</h4>
                   <p className="text-[11px] text-slate-600 leading-relaxed">
-                    Para anexos classificados como extrato, o conversor OFX gera o arquivo automaticamente para download em Arquivos e no Conversor OFX.
+                    Para anexos classificados como extrato ou nota fiscal processada, o conversor OFX gera o arquivo automaticamente para download em Arquivos e no Conversor OFX.
                   </p>
                 </div>
               </div>
@@ -510,9 +526,9 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3 shrink-0">
+        <div className="px-4 sm:px-5 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3 shrink-0">
           <span className="text-[11px] text-slate-500 font-medium">
-            ContSuite Contábil · Versão 1.0
+            ContSuite Contábil · Versão 1.1
           </span>
           <button
             type="button"

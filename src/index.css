@@ -1,9 +1,16 @@
 @import "tailwindcss";
 
 /* Sleek native browser scrollbar styling placed at the exact right edge */
-html {
-  overflow-y: scroll;
+html, body {
+  max-width: 100%;
+  overflow-x: clip;
   scroll-behavior: smooth;
+}
+
+@media (min-width: 768px) {
+  html {
+    overflow-y: scroll;
+  }
 }
 
 ::-webkit-scrollbar {

@@ -11,11 +11,21 @@ import {
   Lock,
   Send,
   Plus,
+  FileText,
+  Image as ImageIcon,
 } from 'lucide-react';
-import { PDFDocument } from 'pdf-lib';
 import { Company, CompanyDocument, User } from '../types';
 import { saveDocumentToFirestore } from '../firebase/service';
 import { saveBlobToIdb } from '../utils/fileStorage';
+import { PdfCanvasViewer } from './PdfCanvasViewer';
+import { isMasterUser } from '../utils/auth';
+import {
+  buildCompressedPdfFromDataUrls,
+  compressImageInputToJpegDataUrl,
+  compressSourceToUltraSmallJpegDataUrl,
+  formatCompactBytes,
+  uint8ToBase64,
+} from '../utils/imageToCompressedPdf';
 
 interface DocumentScannerModalProps {
   isOpen: boolean;
@@ -24,46 +34,6 @@ interface DocumentScannerModalProps {
   currentCompany: Company;
   showToast: (text: string, type?: 'success' | 'error') => void;
   onDocumentSaved: (doc: CompanyDocument) => void;
-}
-
-function uint8ToBase64(bytes: Uint8Array): string {
-  const chunkSize = 0x8000;
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const chunk = bytes.subarray(i, i + chunkSize);
-    binary += String.fromCharCode(...chunk);
-  }
-  return btoa(binary);
-}
-
-function compressImageDataUrl(dataUrl: string, maxDim = 1600, quality = 0.78): Promise<string> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      let { width, height } = img;
-      if (width > maxDim || height > maxDim) {
-        if (width >= height) {
-          height = Math.round((height * maxDim) / width);
-          width = maxDim;
-        } else {
-          width = Math.round((width * maxDim) / height);
-          height = maxDim;
-        }
-      }
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        resolve(dataUrl);
-        return;
-      }
-      ctx.drawImage(img, 0, 0, width, height);
-      resolve(canvas.toDataURL('image/jpeg', quality));
-    };
-    img.onerror = () => resolve(dataUrl);
-    img.src = dataUrl;
-  });
 }
 
 export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
@@ -79,6 +49,10 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
   const [isProcessing, setIsProcessing] = useState(false);
   const [documentTitle, setDocumentTitle] = useState('');
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [previewMode, setPreviewMode] = useState<'pdf' | 'photo'>('pdf');
+  const [previewPdfBase64, setPreviewPdfBase64] = useState<string | null>(null);
+  const [previewPdfBytesLength, setPreviewPdfBytesLength] = useState<number>(0);
+  const [buildingPreview, setBuildingPreview] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -99,6 +73,9 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       setCapturedImages([]);
+      setPreviewPdfBase64(null);
+      setPreviewPdfBytesLength(0);
+      setPreviewMode('pdf');
       setDocumentTitle(`Documento Digitalizado - ${new Date().toLocaleDateString('pt-BR')}`);
       setCameraError(null);
       setIsCameraActive(false);
@@ -140,50 +117,74 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
     }
   };
 
-  const captureSnapshot = () => {
-    if (!videoRef.current || !canvasRef.current) return;
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
+  const buildPdfFromImages = async (images: string[]): Promise<Uint8Array> => {
+    return buildCompressedPdfFromDataUrls(images);
+  };
 
-    const rawW = video.videoWidth || 1280;
-    const rawH = video.videoHeight || 720;
-    const maxDim = 1600;
-    let targetW = rawW;
-    let targetH = rawH;
-    if (rawW > maxDim || rawH > maxDim) {
-      if (rawW >= rawH) {
-        targetH = Math.round((rawH * maxDim) / rawW);
-        targetW = maxDim;
-      } else {
-        targetW = Math.round((rawW * maxDim) / rawH);
-        targetH = maxDim;
-      }
+  // Automatically generate live compressed PDF preview whenever captured images change
+  useEffect(() => {
+    let cancelled = false;
+    if (!isOpen || capturedImages.length === 0) {
+      setPreviewPdfBase64(null);
+      setPreviewPdfBytesLength(0);
+      return;
+    }
+    setBuildingPreview(true);
+    buildPdfFromImages(capturedImages)
+      .then((bytes) => {
+        if (!cancelled) {
+          setPreviewPdfBase64(uint8ToBase64(bytes));
+          setPreviewPdfBytesLength(bytes.length);
+        }
+      })
+      .catch((err) => {
+        console.warn('Could not build live PDF preview:', err);
+        if (!cancelled) {
+          setPreviewPdfBase64(null);
+          setPreviewPdfBytesLength(0);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setBuildingPreview(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, capturedImages]);
+
+  const captureSnapshot = () => {
+    if (!videoRef.current) return;
+    const video = videoRef.current;
+
+    if (!video.videoWidth || !video.videoHeight) {
+      showToast('Aguarde 1 segundo a câmera focar e tente novamente.', 'error');
+      return;
     }
 
-    canvas.width = targetW;
-    canvas.height = targetH;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.drawImage(video, 0, 0, targetW, targetH);
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.78);
-    setCapturedImages((prev) => [...prev, dataUrl]);
+    const compressedDataUrl = compressSourceToUltraSmallJpegDataUrl(
+      video,
+      video.videoWidth,
+      video.videoHeight
+    );
+    setCapturedImages((prev) => [...prev, compressedDataUrl]);
+    setPreviewMode('pdf');
     stopCamera();
-    showToast(`Foto capturada! Clique em Enviar para sincronizar.`);
+    showToast(`Foto capturada e convertida para PDF comprimido! Confira e clique em Enviar.`);
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
     Array.from(files).forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = async (event) => {
-        const result = event.target?.result as string;
-        if (result) {
-          const compressed = await compressImageDataUrl(result);
+      compressImageInputToJpegDataUrl(file)
+        .then((compressed) => {
           setCapturedImages((prev) => [...prev, compressed]);
-        }
-      };
-      reader.readAsDataURL(file);
+          setPreviewMode('pdf');
+        })
+        .catch((err) => {
+          console.warn('Could not compress uploaded image:', err);
+          showToast('Não foi possível processar esta foto.', 'error');
+        });
     });
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -195,6 +196,7 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
   const handleCancelCaptured = () => {
     stopCamera();
     setCapturedImages([]);
+    setPreviewPdfBase64(null);
   };
 
   const handleGeneratePdfAndSave = async () => {
@@ -205,33 +207,19 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
 
     setIsProcessing(true);
     try {
-      const pdfDoc = await PDFDocument.create();
-
-      for (const imgDataUrl of capturedImages) {
-        const base64Clean = imgDataUrl.split(',')[1] || imgDataUrl;
-        const imgBytes = Uint8Array.from(atob(base64Clean), (c) => c.charCodeAt(0));
-
-        let embeddedImage;
-        if (imgDataUrl.includes('image/png')) {
-          embeddedImage = await pdfDoc.embedPng(imgBytes);
-        } else {
-          embeddedImage = await pdfDoc.embedJpg(imgBytes);
-        }
-
-        const page = pdfDoc.addPage([embeddedImage.width, embeddedImage.height]);
-        page.drawImage(embeddedImage, {
-          x: 0,
-          y: 0,
-          width: embeddedImage.width,
-          height: embeddedImage.height,
-        });
-      }
-
-      const pdfBytes = await pdfDoc.save();
+      const pdfBytes = await buildPdfFromImages(capturedImages);
       const base64Pdf = uint8ToBase64(pdfBytes);
 
-      // Strictly bound ONLY to the logged-in / active company
-      const lockedCompany = currentCompany;
+      // Strictly bound ONLY to the logged-in / active company (never comp-master for non-master users)
+      const lockedCompany = isMasterUser(currentUser)
+        ? currentCompany
+        : (currentCompany.id && currentCompany.id !== 'comp-master'
+            ? currentCompany
+            : {
+                id: currentUser.companyId || 'comp-fallback',
+                name: currentCompany.name,
+                fantasyName: currentCompany.fantasyName,
+              } as Company);
       const docId = 'doc-scan-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1000);
       const cleanTitle = (documentTitle.trim() || 'Documento_Digitalizado').replace(/\.pdf$/i, '');
       const fileName = `${cleanTitle}.pdf`;
@@ -490,25 +478,79 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
                 </label>
               </div>
             ) : (
-              /* CAPTURED PHOTO PREVIEW */
+              /* CAPTURED DOCUMENT PREVIEW (PDF + PHOTO TOGGLE) */
               <div className="space-y-3 animate-in fade-in duration-150">
-                {latestImage && (
-                  <div className="relative rounded-2xl overflow-hidden border border-slate-300 bg-slate-950 h-[36dvh] sm:h-[40dvh] flex items-center justify-center">
-                    <img
-                      src={latestImage}
-                      alt="Foto capturada"
-                      className="w-full h-full object-contain"
-                    />
-                    <div className="absolute top-2.5 left-2.5 px-2.5 py-1 rounded-full bg-black/75 text-white text-[11px] font-bold">
-                      Página {capturedImages.length} de {capturedImages.length}
-                    </div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="inline-flex p-0.5 rounded-xl bg-slate-100 border border-slate-200">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewMode('pdf')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer transition ${
+                        previewMode === 'pdf'
+                          ? 'bg-white text-teal-800 shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      <FileText className="w-3.5 h-3.5" />
+                      <span>Visualizar PDF</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewMode('photo')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer transition ${
+                        previewMode === 'photo'
+                          ? 'bg-white text-teal-800 shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      <ImageIcon className="w-3.5 h-3.5" />
+                      <span>Foto ({capturedImages.length})</span>
+                    </button>
                   </div>
+                  <span className="text-[11px] font-bold text-slate-600">
+                    {capturedImages.length}{' '}
+                    {capturedImages.length === 1 ? 'página' : 'páginas'}
+                  </span>
+                </div>
+
+                {previewMode === 'pdf' ? (
+                  buildingPreview ? (
+                    <div className="h-[38dvh] sm:h-[42dvh] rounded-2xl border border-slate-200 bg-slate-100 flex flex-col items-center justify-center gap-2 text-slate-600">
+                      <Loader2 className="w-6 h-6 animate-spin text-[#00897b]" />
+                      <span className="text-xs font-semibold">Gerando visualização do PDF...</span>
+                    </div>
+                  ) : previewPdfBase64 ? (
+                    <PdfCanvasViewer
+                      base64={previewPdfBase64}
+                      fileName={`${(documentTitle.trim() || 'Documento_Digitalizado').replace(/\.pdf$/i, '')}.pdf`}
+                      mimeType="application/pdf"
+                      maxHeightClass="h-[38dvh] sm:h-[42dvh]"
+                    />
+                  ) : latestImage ? (
+                    <div className="relative rounded-2xl overflow-hidden border border-slate-300 bg-slate-950 h-[36dvh] sm:h-[40dvh] flex items-center justify-center">
+                      <img src={latestImage} alt="Foto capturada" className="w-full h-full object-contain" />
+                    </div>
+                  ) : null
+                ) : (
+                  latestImage && (
+                    <div className="relative rounded-2xl overflow-hidden border border-slate-300 bg-slate-950 h-[36dvh] sm:h-[40dvh] flex items-center justify-center">
+                      <img
+                        src={latestImage}
+                        alt="Foto capturada"
+                        className="w-full h-full object-contain"
+                      />
+                      <div className="absolute top-2.5 left-2.5 px-2.5 py-1 rounded-full bg-black/75 text-white text-[11px] font-bold">
+                        Página {capturedImages.length} de {capturedImages.length}
+                      </div>
+                    </div>
+                  )
                 )}
 
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-bold text-slate-700">
-                    {capturedImages.length}{' '}
-                    {capturedImages.length === 1 ? 'página pronta' : 'páginas prontas'}
+                    {previewPdfBytesLength > 0
+                      ? `PDF Comprimido • ${formatCompactBytes(previewPdfBytesLength)}`
+                      : 'Pronto para envio em PDF'}
                   </span>
                   <div className="flex items-center gap-2">
                     <button

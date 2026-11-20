@@ -441,8 +441,8 @@ export const HonorariosView: React.FC<HonorariosViewProps> = ({
 
       {/* Modal: Novo Contrato de Honorários */}
       {isContractModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl space-y-6">
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl sm:rounded-3xl max-w-lg w-full max-h-[92dvh] overflow-y-auto p-5 sm:p-8 shadow-2xl space-y-6">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
                 <Coins className="w-5 h-5 text-amber-600" />
@@ -475,7 +475,7 @@ export const HonorariosView: React.FC<HonorariosViewProps> = ({
                 </select>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
                     Valor Mensal (R$)
@@ -571,8 +571,8 @@ export const HonorariosView: React.FC<HonorariosViewProps> = ({
 
       {/* Modal: Registrar Pagamento de Honorário */}
       {isPayModalOpen && selectedContract && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 sm:p-8 shadow-2xl space-y-6">
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl sm:rounded-3xl max-w-md w-full max-h-[92dvh] overflow-y-auto p-5 sm:p-8 shadow-2xl space-y-6">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
                 <Receipt className="w-5 h-5 text-emerald-600" />

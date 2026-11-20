@@ -111,30 +111,30 @@ export const CompanyModal: React.FC<CompanyModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 space-y-4">
-        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-          <div className="flex items-center gap-2">
-            <div className="p-2 rounded-xl bg-teal-100 text-teal-800">
+    <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+      <div className="bg-white rounded-2xl max-w-xl w-full max-h-[92dvh] overflow-y-auto p-4 sm:p-6 shadow-2xl border border-slate-200 space-y-4">
+        <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-100">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="p-2 rounded-xl bg-teal-100 text-teal-800 shrink-0">
               <Building2 className="w-5 h-5" />
             </div>
-            <div>
-              <h3 className="font-bold text-slate-900 text-sm">
+            <div className="min-w-0">
+              <h3 className="font-bold text-slate-900 text-sm truncate">
                 {companyToEdit ? 'Editar Dados da Empresa' : 'Cadastrar Nova Empresa'}
               </h3>
-              <p className="text-xs text-slate-500">Parâmetros cadastrais e contas padrão de integração</p>
+              <p className="text-xs text-slate-500 truncate">Parâmetros cadastrais e contas padrão de integração</p>
             </div>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer">
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer shrink-0">
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Administrator Anchorage Badge */}
-        <div className="p-3 bg-teal-50/80 border border-teal-200/80 rounded-xl text-xs flex items-center justify-between text-teal-950">
-          <div className="flex items-center gap-2">
+        <div className="p-3 bg-teal-50/80 border border-teal-200/80 rounded-xl text-xs flex flex-wrap items-center justify-between gap-2 text-teal-950">
+          <div className="flex items-center gap-2 min-w-0">
             <ShieldCheck className="w-4 h-4 text-[#00897b] shrink-0" />
-            <span>
+            <span className="break-words min-w-0">
               Vinculada ao Administrador Master: <strong>Rodrigo Bento</strong> ({adminEmail || 'rodrigobento1979@gmail.com'})
             </span>
           </div>
@@ -163,7 +163,7 @@ export const CompanyModal: React.FC<CompanyModalProps> = ({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block font-semibold text-slate-700 mb-1">Nome Fantasia</label>
               <input
@@ -187,7 +187,7 @@ export const CompanyModal: React.FC<CompanyModalProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block font-semibold text-slate-700 mb-1">E-mail Financeiro</label>
               <input
@@ -220,7 +220,7 @@ export const CompanyModal: React.FC<CompanyModalProps> = ({
 
           <div className="pt-2 border-t border-slate-100 space-y-2">
             <span className="font-bold text-slate-700 block">Contas Contábeis Padrão da Empresa:</span>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <div>
                 <label className="block text-[10px] text-slate-500 font-semibold mb-0.5">Conta Ativo:</label>
                 <input

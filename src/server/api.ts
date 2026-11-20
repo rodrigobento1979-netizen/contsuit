@@ -1157,18 +1157,19 @@ apiRouter.post('/ofx/convert', async (req: Request, res: Response) => {
   }
 });
 
-// Extract a single PDF page batch (used by frontend progress-aware multi-page reader)
+// Extract a single PDF page batch or text/XML file (used by multi-page reader and batch OFX merger)
 apiRouter.post('/ofx/extract-chunk', async (req: Request, res: Response) => {
   try {
-    const { fileBase64, mimeType, bankHint } = req.body;
-    if (!fileBase64) {
-      return res.status(400).json({ error: 'Bloco de páginas do extrato não enviado.' });
+    const { fileBase64, mimeType, rawText, bankHint } = req.body;
+    if (!fileBase64 && !rawText) {
+      return res.status(400).json({ error: 'Bloco de páginas ou conteúdo do arquivo não enviado.' });
     }
 
-    // parseStatementWithAI handles page splitting automatically even inside a multi-page batch if dense
+    // parseStatementWithAI handles XML fiscal parsing, regex, and AI extraction
     const extraction = await parseStatementWithAI({
       fileBase64,
-      mimeType: mimeType || 'application/pdf',
+      mimeType: mimeType || (rawText ? 'text/plain' : 'application/pdf'),
+      rawText,
       bankHint,
     });
 
@@ -1180,7 +1181,7 @@ apiRouter.post('/ofx/extract-chunk', async (req: Request, res: Response) => {
     console.error('Error during OFX chunk extraction:', err);
     const statusCode = err?.status === 429 || err?.status === 403 || err?.status === 400 ? err.status : 500;
     return res.status(statusCode).json({
-      error: err.message || 'Falha ao ler bloco de páginas do extrato.',
+      error: err.message || 'Falha ao ler bloco de páginas do documento.',
     });
   }
 });

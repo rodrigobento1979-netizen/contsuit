@@ -366,8 +366,8 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
 
       {/* MODAL: CONFIRMAR LIMPEZA DE DEMONSTRAÇÃO */}
       {showClearConfirmModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-rose-200 space-y-4 animate-in fade-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full max-h-[92dvh] overflow-y-auto p-4 sm:p-6 shadow-2xl border border-rose-200 space-y-4 animate-in fade-in zoom-in-95 duration-200">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-xl bg-rose-100 text-rose-800">
@@ -447,8 +447,8 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
 
       {/* MODAL: RESTAURAR BACKUP */}
       {showRestoreModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full max-h-[92dvh] overflow-y-auto p-4 sm:p-6 shadow-2xl border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-200">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-xl bg-teal-100 text-teal-800">
@@ -515,7 +515,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                   rows={6}
                   value={restoreJsonText}
                   onChange={(e) => setRestoreJsonText(e.target.value)}
-                  placeholder='{"version": "1.0", "data": { "companies": [...], "assets": [...] }}'
+                  placeholder='{"version": "1.1", "data": { "companies": [...], "assets": [...] }}'
                   className="w-full p-2.5 rounded-xl border border-slate-300 font-mono text-[11px] focus:outline-none focus:ring-2 focus:ring-teal-500"
                 />
               </div>

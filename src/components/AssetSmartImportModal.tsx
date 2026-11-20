@@ -118,30 +118,30 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
-      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-xl overflow-hidden flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
+      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-xl max-h-[92dvh] overflow-hidden flex flex-col">
         
         {/* Header */}
-        <div className="px-6 py-4 bg-gradient-to-r from-teal-800 to-teal-900 text-white flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-teal-700 text-teal-200 flex items-center justify-center shadow-inner">
+        <div className="px-4 sm:px-6 py-3.5 sm:py-4 bg-gradient-to-r from-teal-800 to-teal-900 text-white flex items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-teal-700 text-teal-200 flex items-center justify-center shadow-inner shrink-0">
               <Sparkles className="w-5 h-5 text-[#a7ffeb]" />
             </div>
-            <div>
-              <h2 className="text-base font-extrabold tracking-tight">Cadastro Inteligente de Ativo por IA</h2>
-              <p className="text-xs text-teal-200">Análise de PDF, XLS ou Documentos com Confirmação Objetiva</p>
+            <div className="min-w-0">
+              <h2 className="text-sm sm:text-base font-extrabold tracking-tight truncate">Cadastro Inteligente de Ativo por IA</h2>
+              <p className="text-xs text-teal-200 truncate">Análise de PDF, XLS ou Documentos com Confirmação Objetiva</p>
             </div>
           </div>
           <button 
             onClick={onClose}
-            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition cursor-pointer"
+            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition cursor-pointer shrink-0"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Content Body */}
-        <div className="p-6 space-y-5">
+        <div className="p-4 sm:p-6 space-y-5 overflow-y-auto flex-1 min-h-0">
           
           {/* STEP 0: UPLOAD & ATTACH */}
           {analysisStep === 0 && (

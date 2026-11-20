@@ -35,6 +35,11 @@ import {
 } from 'lucide-react';
 import { PDFDocument } from 'pdf-lib';
 import {
+  convertImageFileToCompressedPdfFile,
+  formatCompactBytes,
+  isImageFile,
+} from '../utils/imageToCompressedPdf';
+import {
   Company,
   CompanyDocument,
   ConvertedStatement,
@@ -70,6 +75,7 @@ interface DocumentsViewProps {
   allCompanies: Company[];
   onSelectCompany: (companyId: string) => void;
   onOpenInOfxConverter?: (file: File) => void;
+  onNavigateToOfx?: () => void;
   showToast: (text: string, type?: 'success' | 'error') => void;
 }
 
@@ -291,6 +297,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   allCompanies,
   onSelectCompany,
   onOpenInOfxConverter,
+  onNavigateToOfx,
   showToast,
 }) => {
   const isMaster = isMasterUser(currentUser);
@@ -321,6 +328,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     isSyncingInbox,
     lastInboxSyncEventTs,
     syncEmailInboxNow,
+    isConvertingBatchOfx,
+    batchOfxProgress,
+    convertMultipleDocsToSingleOfx,
   } = useOfxAgent();
 
   const [documents, setDocuments] = useState<CompanyDocument[]>([]);
@@ -356,6 +366,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const [savingDetail, setSavingDetail] = useState(false);
   const [reclassifying, setReclassifying] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
   const reattachInputRef = useRef<HTMLInputElement>(null);
 
   // Editable detail fields
@@ -476,8 +487,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   }, [currentCompany.id, cacheKey, mergeDocsIntoState]);
 
   useEffect(() => {
+    setSelectedDocIds([]);
     void loadDocuments(false);
-  }, [loadDocuments]);
+  }, [loadDocuments, currentCompany.id]);
 
   // Real-time cross-device sync: Firestore onSnapshot + instant custom event + silent 3s API poll
   useEffect(() => {
@@ -677,11 +689,25 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     };
 
     for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      setUploadingQueue({ total: files.length, completed: i, currentFileName: file.name });
+      const rawFile = files[i];
+      setUploadingQueue({ total: files.length, completed: i, currentFileName: rawFile.name });
 
       try {
-        const fullBase64 = await readFileBase64(file);
+        let file = rawFile;
+        let fullBase64 = '';
+        if (isImageFile(rawFile)) {
+          setUploadingQueue({
+            total: files.length,
+            completed: i,
+            currentFileName: `${rawFile.name} — Convertendo foto para PDF comprimido...`,
+          });
+          const converted = await convertImageFileToCompressedPdfFile(rawFile);
+          file = converted.pdfFile;
+          fullBase64 = converted.base64;
+        } else {
+          fullBase64 = await readFileBase64(file);
+        }
+
         const mimeType =
           file.type ||
           (file.name.toLowerCase().endsWith('.pdf')
@@ -821,7 +847,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           await persistCreatedCard(savedDoc, fullBase64);
         }
       } catch (err: any) {
-        showToast(`Erro ao processar "${file.name}": ${err?.message || 'falha'}`, 'error');
+        showToast(`Erro ao processar "${rawFile.name}": ${err?.message || 'falha'}`, 'error');
       }
     }
 
@@ -1024,20 +1050,46 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     setLoadingPreview(false);
   };
 
-  const handleReattachFile = async (docItem: CompanyDocument, file: File) => {
+  const handleReattachFile = async (docItem: CompanyDocument, rawFile: File) => {
     try {
       setLoadingPreview(true);
-      const b64 = cleanBase64(await readFileBase64(file));
+      let b64: string;
+      let nextFileName = docItem.fileName;
+      let nextMimeType = docItem.mimeType;
+      let nextSize = docItem.fileSize;
+
+      if (isImageFile(rawFile)) {
+        const converted = await convertImageFileToCompressedPdfFile(rawFile);
+        b64 = cleanBase64(converted.base64);
+        nextFileName = docItem.fileName.toLowerCase().endsWith('.pdf')
+          ? docItem.fileName
+          : converted.pdfFile.name;
+        nextMimeType = 'application/pdf';
+        nextSize = converted.compressedSize;
+      } else {
+        b64 = cleanBase64(await readFileBase64(rawFile));
+      }
+
       await saveBlobToIdb(docItem.id, b64);
+      const updatedDoc: CompanyDocument = {
+        ...docItem,
+        fileName: nextFileName,
+        mimeType: nextMimeType,
+        fileSize: nextSize,
+        hasOriginalFile: true,
+      };
       setDocuments((prev) => {
-        const next = prev.map((d) =>
-          d.id === docItem.id ? { ...d, hasOriginalFile: true } : d
-        );
+        const next = prev.map((d) => (d.id === docItem.id ? updatedDoc : d));
         persistCacheList(next);
         return next;
       });
-      applyPreviewContent(docItem, b64);
-      showToast('Arquivo vinculado localmente para pré-visualização!');
+      setSelectedDoc((prev) => (prev?.id === docItem.id ? updatedDoc : prev));
+      applyPreviewContent(updatedDoc, b64);
+      showToast(
+        isImageFile(rawFile)
+          ? `Foto convertida para PDF comprimido (${formatCompactBytes(nextSize)}) e vinculada!`
+          : 'Arquivo vinculado localmente para pré-visualização!'
+      );
     } catch (err: any) {
       showToast(err?.message || 'Falha ao vincular arquivo.', 'error');
     } finally {
@@ -1287,6 +1339,53 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     showToast(`"${docItem.fileName}" arquivado em Concluído.`);
   };
 
+  const toggleDocSelection = (docId: string) => {
+    setSelectedDocIds((prev) =>
+      prev.includes(docId) ? prev.filter((id) => id !== docId) : [...prev, docId]
+    );
+  };
+
+  const handleToggleSelectAllFiltered = () => {
+    const visibleIds = filteredDocs.map((d) => d.id);
+    if (visibleIds.length === 0) return;
+    const allSelected = visibleIds.every((id) => selectedDocIds.includes(id));
+    if (allSelected) {
+      setSelectedDocIds((prev) => prev.filter((id) => !visibleIds.includes(id)));
+    } else {
+      setSelectedDocIds((prev) => Array.from(new Set([...prev, ...visibleIds])));
+    }
+  };
+
+  const handleConvertSelectedToSingleOfx = async () => {
+    const selectedDocs = documents.filter((d) => selectedDocIds.includes(d.id));
+    if (selectedDocs.length === 0) {
+      showToast('Selecione pelo menos um arquivo para gerar o OFX.', 'error');
+      return;
+    }
+
+    const stmt = await convertMultipleDocsToSingleOfx(selectedDocs, resolveFileBase64);
+    if (stmt) {
+      setDocuments((prev) => {
+        const next = prev.map((d) =>
+          selectedDocIds.includes(d.id)
+            ? {
+                ...d,
+                ofxStatus: 'done' as DocumentOfxStatus,
+                ofxStatementId: stmt.id,
+                ofxError: '',
+              }
+            : d
+        );
+        persistCacheList(next);
+        return next;
+      });
+      setSelectedDocIds([]);
+      if (onNavigateToOfx) {
+        onNavigateToOfx();
+      }
+    }
+  };
+
   const renderDocCard = (docItem: CompanyDocument, showCategoryLabel: boolean) => {
     const Icon = getFileIcon(docItem.mimeType, docItem.fileName);
     const catMeta = CATEGORY_COLUMNS.find((c) => c.id === docItem.category) || CATEGORY_COLUMNS[5];
@@ -1312,6 +1411,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       docItem.category !== 'extrato' &&
       (docProcJob?.status === 'done' ||
         Boolean(docItem.notes && docItem.notes.includes('[Processado IA]')));
+    const isSelected = selectedDocIds.includes(docItem.id);
 
     return (
       <div
@@ -1323,12 +1423,33 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           setDragTargetCol(null);
         }}
         onClick={() => openDetailModal(docItem)}
-        className={`group bg-white border border-slate-200 hover:border-teal-400 rounded-xl p-3 transition-colors cursor-pointer select-none ${
-          draggingDocId === docItem.id ? 'opacity-50' : ''
-        }`}
+        className={`group bg-white border rounded-xl p-3 transition-colors cursor-pointer select-none ${
+          isSelected
+            ? 'border-[#00897b] ring-2 ring-[#00897b]/25 bg-teal-50/20'
+            : 'border-slate-200 hover:border-teal-400'
+        } ${draggingDocId === docItem.id ? 'opacity-50' : ''}`}
       >
-        {/* Top line: Icon + File Name */}
+        {/* Top line: Radio selector + Icon + File Name */}
         <div className="flex items-start gap-2.5">
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={isSelected}
+            aria-label={`Selecionar ${docItem.fileName} para OFX único`}
+            title={isSelected ? 'Desmarcar arquivo' : 'Selecionar para unificar em 1 OFX'}
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleDocSelection(docItem.id);
+            }}
+            className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 mt-1 transition-colors cursor-pointer ${
+              isSelected
+                ? 'border-[#00897b] bg-teal-50'
+                : 'border-slate-300 hover:border-[#00897b] bg-white'
+            }`}
+          >
+            {isSelected && <span className="w-2.5 h-2.5 rounded-full bg-[#00897b]" />}
+          </button>
+
           <div className="w-8 h-8 rounded-lg bg-slate-100 text-slate-700 flex items-center justify-center shrink-0 mt-0.5">
             <Icon className="w-4 h-4" />
           </div>
@@ -1359,8 +1480,8 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           </div>
         )}
 
-        {/* Live Background OFX Agent Signaling */}
-        {docItem.category === 'extrato' && (effectiveOfxStatus === 'queued' || effectiveOfxStatus === 'processing') && (
+        {/* Live Background OFX Agent Signaling (Extratos AND Notas Fiscais / outros convertidos para OFX) */}
+        {(effectiveOfxStatus === 'queued' || effectiveOfxStatus === 'processing') && (
           <div className="mt-2 p-2 rounded-lg bg-teal-50 border border-teal-200 space-y-1">
             <div className="flex items-center justify-between gap-2 text-[11px] font-bold text-teal-900">
               <span className="flex items-center gap-1.5 truncate">
@@ -1386,15 +1507,15 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           </div>
         )}
 
-        {docItem.category === 'extrato' && effectiveOfxStatus === 'done' && (
+        {effectiveOfxStatus === 'done' && (
           <div className="mt-2 px-2 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-between gap-1.5 flex-wrap">
             <span className="flex items-center gap-1 text-[11px] font-bold text-emerald-800 truncate min-w-0">
               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
               <span className="truncate">
-                {liveJob?.statusLabel || 'OFX Pronto'}
+                {liveJob?.statusLabel || 'Enviado ao OFX'}
               </span>
             </span>
-            <div className="flex items-center gap-1 shrink-0">
+            <div className="flex items-center gap-1 shrink-0 flex-wrap">
               <button
                 type="button"
                 onClick={(e) => {
@@ -1407,11 +1528,29 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 <Download className="w-3 h-3" />
                 <span>Baixar OFX</span>
               </button>
+              {onNavigateToOfx && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onNavigateToOfx();
+                  }}
+                  className="px-2 py-0.5 rounded bg-teal-700 hover:bg-teal-800 text-white text-[10px] font-bold flex items-center gap-1 cursor-pointer shrink-0"
+                  title="Visualizar no módulo Conversor OFX"
+                >
+                  <ArrowRight className="w-2.5 h-2.5" />
+                  <span>Ver OFX</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  enqueueDocumentForOfx(docItem);
+                  if (docItem.category === 'extrato') {
+                    enqueueDocumentForOfx(docItem);
+                  } else {
+                    enqueueNonExtratoProcessing(docItem);
+                  }
                 }}
                 className="px-2 py-0.5 rounded bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold flex items-center gap-1 cursor-pointer shrink-0"
                 title="Processar e gerar OFX novamente"
@@ -1423,7 +1562,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           </div>
         )}
 
-        {docItem.category === 'extrato' && effectiveOfxStatus === 'error' && (
+        {effectiveOfxStatus === 'error' && (
           <div className="mt-2 px-2 py-1.5 rounded-lg bg-rose-50 border border-rose-200 flex items-center justify-between gap-2">
             <span className="flex items-center gap-1 text-[10px] font-semibold text-rose-700 truncate">
               <AlertCircle className="w-3 h-3 shrink-0" />
@@ -1433,7 +1572,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                enqueueDocumentForOfx(docItem);
+                if (docItem.category === 'extrato') {
+                  enqueueDocumentForOfx(docItem);
+                } else {
+                  enqueueNonExtratoProcessing(docItem);
+                }
               }}
               className="text-[10px] font-bold text-rose-800 underline cursor-pointer shrink-0"
             >
@@ -1514,7 +1657,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           )}
         </div>
 
-        {/* Quick Card Footer Actions: Ver PDF, Arquivar Concluído, Download, OFX, Excluir */}
+        {/* Quick Card Footer Actions */}
         {confirmDeleteId === docItem.id ? (
           <div
             onClick={(e) => e.stopPropagation()}
@@ -1580,7 +1723,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                   </button>
                 )}
 
-              {docItem.category === 'extrato' && onOpenInOfxConverter && (
+              {onOpenInOfxConverter && docItem.category === 'extrato' && (
                 <button
                   type="button"
                   onClick={(e) => {
@@ -1607,14 +1750,14 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                     docProcJob?.status === 'queued' || docProcJob?.status === 'processing'
                   }
                   className="text-[11px] font-semibold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200/80 px-2 py-0.5 rounded-md flex items-center gap-1 cursor-pointer whitespace-nowrap disabled:opacity-50"
-                  title="Processar documento com IA (extrair valores, CNPJ e lançamento contábil)"
+                  title="Processar com IA e enviar automaticamente para o Conversor OFX"
                 >
                   {docProcJob?.status === 'queued' || docProcJob?.status === 'processing' ? (
                     <Loader2 className="w-3 h-3 animate-spin" />
                   ) : (
                     <Play className="w-3 h-3 fill-current" />
                   )}
-                  <span>{isNonExtratoProcessed ? 'Reprocessar' : 'Processar'}</span>
+                  <span>{isNonExtratoProcessed || effectiveOfxStatus === 'done' ? 'Reprocessar' : 'Processar'}</span>
                 </button>
               )}
             </div>
@@ -1708,9 +1851,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           </div>
         </div>
 
-        {/* Right Controls: View Switcher + Compact Folder Upload CTA on the same line */}
-        <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0">
-          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200/70 overflow-x-auto">
+        {/* Right Controls: View Switcher + Compact Folder Upload CTA */}
+        <div className="flex flex-wrap items-center justify-between sm:justify-end gap-2 w-full xl:w-auto min-w-0">
+          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200/70 overflow-x-auto max-w-full min-w-0">
             <button
               type="button"
               onClick={() => setViewMode('kanban_category')}
@@ -2056,6 +2199,31 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
           <button
             type="button"
+            onClick={handleToggleSelectAllFiltered}
+            disabled={filteredDocs.length === 0}
+            className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-50 ${
+              filteredDocs.length > 0 && filteredDocs.every((d) => selectedDocIds.includes(d.id))
+                ? 'bg-teal-50 border-[#00897b] text-teal-900'
+                : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+            }`}
+            title="Selecionar ou desmarcar todos os arquivos visíveis para gerar um único OFX"
+          >
+            <span
+              className={`w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                filteredDocs.length > 0 && filteredDocs.every((d) => selectedDocIds.includes(d.id))
+                  ? 'border-[#00897b]'
+                  : 'border-slate-400'
+              }`}
+            >
+              {filteredDocs.length > 0 && filteredDocs.every((d) => selectedDocIds.includes(d.id)) && (
+                <span className="w-1.5 h-1.5 rounded-full bg-[#00897b]" />
+              )}
+            </span>
+            <span>Selecionar ({filteredDocs.length})</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => void loadDocuments()}
             className="p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-lg border border-slate-200 transition-colors cursor-pointer"
             title="Atualizar documentos"
@@ -2346,6 +2514,18 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-600">
+                    <th className="py-2.5 px-2.5 w-9 text-center">
+                      <button
+                        type="button"
+                        onClick={handleToggleSelectAllFiltered}
+                        title="Selecionar todos visíveis"
+                        className="w-4 h-4 rounded-full border-2 border-slate-400 inline-flex items-center justify-center cursor-pointer hover:border-[#00897b]"
+                      >
+                        {filteredDocs.length > 0 && filteredDocs.every((d) => selectedDocIds.includes(d.id)) && (
+                          <span className="w-2 h-2 rounded-full bg-[#00897b]" />
+                        )}
+                      </button>
+                    </th>
                     <th className="py-2.5 px-3.5">Arquivo</th>
                     <th className="py-2.5 px-3">Classificação</th>
                     <th className="py-2.5 px-3">Competência</th>
@@ -2358,14 +2538,50 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 <tbody className="divide-y divide-slate-100">
                   {filteredDocs.map((docItem) => {
                     const Icon = getFileIcon(docItem.mimeType, docItem.fileName);
+                    const isRowSelected = selectedDocIds.includes(docItem.id);
+                    const rowStmtId =
+                      docJobs[docItem.id]?.statementId ||
+                      docItem.ofxStatementId ||
+                      recentStatements.find((s) => s.sourceDocId === docItem.id)?.id;
+                    const rowOfxDone =
+                      docJobs[docItem.id]?.status === 'done' ||
+                      docItem.ofxStatus === 'done' ||
+                      Boolean(rowStmtId);
+                    const rowNonExtratoDone =
+                      docItem.category !== 'extrato' &&
+                      (docProcessJobs[docItem.id]?.status === 'done' ||
+                        Boolean(docItem.notes && docItem.notes.includes('[Processado IA]')));
                     return (
                       <tr
                         key={docItem.id}
                         onClick={() => openDetailModal(docItem)}
-                        className="hover:bg-slate-50/80 transition-colors cursor-pointer"
+                        className={`hover:bg-slate-50/80 transition-colors cursor-pointer ${
+                          isRowSelected ? 'bg-teal-50/40' : ''
+                        }`}
                       >
+                        <td
+                          className="py-2.5 px-2.5 text-center"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleDocSelection(docItem.id);
+                          }}
+                        >
+                          <button
+                            type="button"
+                            role="checkbox"
+                            aria-checked={isRowSelected}
+                            aria-label={`Selecionar ${docItem.fileName}`}
+                            className={`w-5 h-5 rounded-full border-2 inline-flex items-center justify-center cursor-pointer transition-colors ${
+                              isRowSelected
+                                ? 'border-[#00897b] bg-teal-50'
+                                : 'border-slate-300 hover:border-[#00897b] bg-white'
+                            }`}
+                          >
+                            {isRowSelected && <span className="w-2.5 h-2.5 rounded-full bg-[#00897b]" />}
+                          </button>
+                        </td>
                         <td className="py-2.5 px-3.5">
-                          <div className="flex items-center gap-2.5 max-w-[260px]">
+                          <div className="flex items-center gap-2.5 max-w-[220px] sm:max-w-[260px]">
                             <Icon className="w-4 h-4 text-slate-500 shrink-0" />
                             <div className="min-w-0">
                               <p className="font-semibold text-slate-900 truncate">
@@ -2444,31 +2660,36 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                 Concluir
                               </button>
                             )}
+                            {rowOfxDone && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void handleDownloadGeneratedOfx(
+                                    rowStmtId,
+                                    docItem.fileName,
+                                    docItem
+                                  )
+                                }
+                                className="px-2 py-1 text-[11px] font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded cursor-pointer whitespace-nowrap inline-flex items-center gap-1"
+                                title="Baixar OFX gerado"
+                              >
+                                <Download className="w-3 h-3" />
+                                <span>Baixar OFX</span>
+                              </button>
+                            )}
+                            {rowOfxDone && onNavigateToOfx && (
+                              <button
+                                type="button"
+                                onClick={() => onNavigateToOfx()}
+                                className="px-2 py-1 text-[11px] font-bold bg-teal-700 hover:bg-teal-800 text-white rounded cursor-pointer whitespace-nowrap inline-flex items-center gap-1"
+                                title="Abrir no Conversor OFX"
+                              >
+                                <ArrowRight className="w-3 h-3" />
+                                <span>Ver OFX</span>
+                              </button>
+                            )}
                             {docItem.category === 'extrato' && (
                               <>
-                                {(docJobs[docItem.id]?.status === 'done' ||
-                                  docItem.ofxStatus === 'done' ||
-                                  docJobs[docItem.id]?.statementId ||
-                                  docItem.ofxStatementId ||
-                                  recentStatements.some((s) => s.sourceDocId === docItem.id)) && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      void handleDownloadGeneratedOfx(
-                                        docJobs[docItem.id]?.statementId ||
-                                          docItem.ofxStatementId ||
-                                          recentStatements.find((s) => s.sourceDocId === docItem.id)?.id,
-                                        docItem.fileName,
-                                        docItem
-                                      )
-                                    }
-                                    className="px-2 py-1 text-[11px] font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded cursor-pointer whitespace-nowrap inline-flex items-center gap-1"
-                                    title="Baixar OFX gerado"
-                                  >
-                                    <Download className="w-3 h-3" />
-                                    <span>Baixar OFX</span>
-                                  </button>
-                                )}
                                 <button
                                   type="button"
                                   onClick={() => enqueueDocumentForOfx(docItem)}
@@ -2482,28 +2703,24 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                   {docJobs[docItem.id]?.status === 'queued' ||
                                   docJobs[docItem.id]?.status === 'processing' ? (
                                     <Loader2 className="w-3 h-3 animate-spin" />
-                                  ) : docItem.ofxStatus === 'done' || docItem.ofxStatementId ? (
+                                  ) : rowOfxDone ? (
                                     <RefreshCw className="w-3 h-3" />
                                   ) : (
                                     <Play className="w-3 h-3 fill-current" />
                                   )}
-                                  <span>
-                                    {docItem.ofxStatus === 'done' || docItem.ofxStatementId
-                                      ? 'Refazer OFX'
-                                      : 'Gerar OFX'}
-                                  </span>
+                                  <span>{rowOfxDone ? 'Refazer OFX' : 'Gerar OFX'}</span>
                                 </button>
+                                {onOpenInOfxConverter && (
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleSendToOfx(docItem)}
+                                    className="px-2 py-1 text-[11px] font-semibold text-teal-700 hover:bg-teal-50 rounded cursor-pointer whitespace-nowrap"
+                                    title="Abrir no Conversor OFX"
+                                  >
+                                    Conversor
+                                  </button>
+                                )}
                               </>
-                            )}
-                            {docItem.category === 'extrato' && onOpenInOfxConverter && (
-                              <button
-                                type="button"
-                                onClick={() => void handleSendToOfx(docItem)}
-                                className="px-2 py-1 text-[11px] font-semibold text-teal-700 hover:bg-teal-50 rounded cursor-pointer whitespace-nowrap"
-                                title="Abrir no Conversor OFX"
-                              >
-                                Conversor
-                              </button>
                             )}
                             {docItem.category !== 'extrato' && (
                               <button
@@ -2514,7 +2731,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                   docProcessJobs[docItem.id]?.status === 'processing'
                                 }
                                 className="px-2 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-50 rounded cursor-pointer whitespace-nowrap inline-flex items-center gap-1 disabled:opacity-50"
-                                title="Processar documento com IA (Play)"
+                                title="Processar com IA e enviar para o Conversor OFX"
                               >
                                 {docProcessJobs[docItem.id]?.status === 'queued' ||
                                 docProcessJobs[docItem.id]?.status === 'processing' ? (
@@ -2522,7 +2739,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                                 ) : (
                                   <Play className="w-3 h-3 fill-current" />
                                 )}
-                                <span>Processar</span>
+                                <span>{rowNonExtratoDone || rowOfxDone ? 'Reprocessar' : 'Processar'}</span>
                               </button>
                             )}
                             <button
@@ -2580,31 +2797,91 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         </div>
       )}
 
+      {/* Sticky Bottom Batch Action Bar for Unified OFX */}
+      {(selectedDocIds.length > 0 || isConvertingBatchOfx) && (
+        <div className="sticky bottom-2 z-30 pb-[env(safe-area-inset-bottom)]">
+          <div className="bg-slate-900 text-white rounded-2xl shadow-2xl border border-teal-500/40 p-3 sm:px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span className="w-6 h-6 rounded-full bg-[#00897b] text-white text-xs font-extrabold flex items-center justify-center shrink-0">
+                {isConvertingBatchOfx ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  selectedDocIds.length
+                )}
+              </span>
+              <div className="min-w-0">
+                <p className="text-xs font-bold truncate">
+                  {isConvertingBatchOfx
+                    ? batchOfxProgress?.label || 'Consolidando arquivos em OFX...'
+                    : `${selectedDocIds.length} ${selectedDocIds.length === 1 ? 'arquivo selecionado' : 'arquivos selecionados'}`}
+                </p>
+                <p className="text-[11px] text-slate-300 truncate">
+                  Unifique notas fiscais, comprovantes ou extratos em um único arquivo .OFX
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+              <button
+                type="button"
+                onClick={() => setSelectedDocIds([])}
+                disabled={isConvertingBatchOfx}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold cursor-pointer disabled:opacity-50"
+              >
+                Limpar
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConvertSelectedToSingleOfx()}
+                disabled={isConvertingBatchOfx || selectedDocIds.length === 0}
+                className="px-3.5 py-1.5 rounded-lg bg-[#00897b] hover:bg-[#00796b] text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-60 whitespace-nowrap"
+              >
+                {isConvertingBatchOfx ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="w-3.5 h-3.5" />
+                )}
+                <span>Transformar em Único OFX</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Document Preview & Edit Modal */}
       {selectedDoc && editDraft && (
         <div
-          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6"
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-0 sm:p-4"
           onClick={closeDetailModal}
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="bg-white border border-slate-200 rounded-xl shadow-2xl w-full max-w-6xl h-[92vh] max-h-[92vh] flex flex-col overflow-hidden"
+            className="bg-white border border-slate-200 rounded-none sm:rounded-xl shadow-2xl w-full max-w-6xl h-[100dvh] sm:h-[92dvh] sm:max-h-[92dvh] flex flex-col overflow-hidden"
           >
             {/* Modal Header */}
-            <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between gap-4 shrink-0">
-              <div className="min-w-0">
-                <h3 className="text-sm font-bold text-slate-900 truncate">
-                  {selectedDoc.fileName}
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  {formatFileSize(selectedDoc.fileSize)} · Enviado em{' '}
-                  {new Date(selectedDoc.uploadedAt).toLocaleDateString('pt-BR')}
-                  {selectedDoc.aiClassified && selectedDoc.confidence
-                    ? ` · Classificado via IA (${selectedDoc.confidence}%)`
-                    : ''}
-                </p>
+            <div className="px-3.5 py-2.5 sm:px-5 sm:py-3 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 shrink-0">
+              <div className="flex items-start justify-between gap-2 min-w-0">
+                <div className="min-w-0">
+                  <h3 className="text-sm font-bold text-slate-900 truncate">
+                    {selectedDoc.fileName}
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5 truncate">
+                    {formatFileSize(selectedDoc.fileSize)} · Enviado em{' '}
+                    {new Date(selectedDoc.uploadedAt).toLocaleDateString('pt-BR')}
+                    {selectedDoc.aiClassified && selectedDoc.confidence
+                      ? ` · Classificado via IA (${selectedDoc.confidence}%)`
+                      : ''}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeDetailModal}
+                  className="sm:hidden p-1.5 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 cursor-pointer shrink-0"
+                >
+                  <X className="w-5 h-5" />
+                </button>
               </div>
-              <div className="flex items-center gap-2 shrink-0 flex-wrap">
+              <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 flex-wrap">
                 <button
                   type="button"
                   onClick={() => setIsPreviewExpanded((v) => !v)}
@@ -2630,36 +2907,51 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                       setEditDraft((prev) => (prev ? { ...prev, status: 'concluido' } : prev));
                       void handleArchiveDocument(selectedDoc);
                     }}
-                    className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                    className="px-2.5 sm:px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
                   >
                     <Archive className="w-3.5 h-3.5" />
-                    <span>Arquivar (Concluído)</span>
+                    <span>Arquivar</span>
                   </button>
+                )}
+                {(docJobs[selectedDoc.id]?.status === 'done' ||
+                  selectedDoc.ofxStatus === 'done' ||
+                  docJobs[selectedDoc.id]?.statementId ||
+                  selectedDoc.ofxStatementId ||
+                  recentStatements.some((s) => s.sourceDocId === selectedDoc.id)) && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void handleDownloadGeneratedOfx(
+                          docJobs[selectedDoc.id]?.statementId ||
+                            selectedDoc.ofxStatementId ||
+                            recentStatements.find((s) => s.sourceDocId === selectedDoc.id)?.id,
+                          selectedDoc.fileName,
+                          selectedDoc
+                        )
+                      }
+                      className="px-2.5 sm:px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Baixar OFX</span>
+                    </button>
+                    {onNavigateToOfx && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          closeDetailModal();
+                          onNavigateToOfx();
+                        }}
+                        className="px-2.5 sm:px-3 py-1.5 rounded-lg bg-teal-700 hover:bg-teal-800 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                      >
+                        <ArrowRight className="w-3.5 h-3.5" />
+                        <span>Ver no OFX</span>
+                      </button>
+                    )}
+                  </>
                 )}
                 {editDraft.category === 'extrato' && (
                   <>
-                    {(docJobs[selectedDoc.id]?.status === 'done' ||
-                      selectedDoc.ofxStatus === 'done' ||
-                      docJobs[selectedDoc.id]?.statementId ||
-                      selectedDoc.ofxStatementId ||
-                      recentStatements.some((s) => s.sourceDocId === selectedDoc.id)) && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void handleDownloadGeneratedOfx(
-                            docJobs[selectedDoc.id]?.statementId ||
-                              selectedDoc.ofxStatementId ||
-                              recentStatements.find((s) => s.sourceDocId === selectedDoc.id)?.id,
-                            selectedDoc.fileName,
-                            selectedDoc
-                          )
-                        }
-                        className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                        <span>Baixar OFX</span>
-                      </button>
-                    )}
                     <button
                       type="button"
                       onClick={() =>
@@ -2669,7 +2961,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                         docJobs[selectedDoc.id]?.status === 'queued' ||
                         docJobs[selectedDoc.id]?.status === 'processing'
                       }
-                      className="px-3 py-1.5 rounded-lg bg-[#004d40] hover:bg-[#00695c] text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-60"
+                      className="px-2.5 sm:px-3 py-1.5 rounded-lg bg-[#004d40] hover:bg-[#00695c] text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-60"
                     >
                       {docJobs[selectedDoc.id]?.status === 'queued' ||
                       docJobs[selectedDoc.id]?.status === 'processing' ? (
@@ -2693,10 +2985,10 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                           closeDetailModal();
                           void handleSendToOfx(target);
                         }}
-                        className="px-3 py-1.5 rounded-lg bg-teal-50 text-teal-800 hover:bg-teal-100 border border-teal-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                        className="px-2.5 sm:px-3 py-1.5 rounded-lg bg-teal-50 text-teal-800 hover:bg-teal-100 border border-teal-200 text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
                       >
                         <Sparkles className="w-3.5 h-3.5" />
-                        <span>Abrir no Conversor OFX</span>
+                        <span>Conversor OFX</span>
                       </button>
                     )}
                   </>
@@ -2711,7 +3003,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                       docProcessJobs[selectedDoc.id]?.status === 'queued' ||
                       docProcessJobs[selectedDoc.id]?.status === 'processing'
                     }
-                    className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-60"
+                    className="px-2.5 sm:px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-60"
                   >
                     {docProcessJobs[selectedDoc.id]?.status === 'queued' ||
                     docProcessJobs[selectedDoc.id]?.status === 'processing' ? (
@@ -2719,13 +3011,17 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                     ) : (
                       <Play className="w-3.5 h-3.5 fill-current" />
                     )}
-                    <span>Processar Documento</span>
+                    <span>
+                      {selectedDoc.ofxStatus === 'done' || selectedDoc.ofxStatementId
+                        ? 'Reprocessar & OFX'
+                        : 'Processar & OFX'}
+                    </span>
                   </button>
                 )}
                 <button
                   type="button"
                   onClick={() => void handleDownloadFile(selectedDoc)}
-                  className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                  className="px-2.5 sm:px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
                 >
                   <Download className="w-3.5 h-3.5" />
                   <span>Baixar</span>
@@ -2733,7 +3029,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 <button
                   type="button"
                   onClick={closeDetailModal}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+                  className="hidden sm:inline-flex p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -2746,7 +3042,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               <div
                 className={`${
                   isPreviewExpanded ? 'lg:col-span-12' : 'lg:col-span-7 border-b lg:border-b-0 lg:border-r border-slate-200'
-                } bg-slate-100 p-3 sm:p-4 flex flex-col min-h-[380px] lg:min-h-0 lg:h-full`}
+                } bg-slate-100 p-3 sm:p-4 flex flex-col min-h-[240px] lg:min-h-0 lg:h-full`}
               >
                 <input
                   ref={reattachInputRef}
@@ -2776,7 +3072,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                     fileName={selectedDoc.fileName}
                     mimeType="application/pdf"
                     className="flex-1 min-h-0"
-                    maxHeightClass="flex-1 min-h-[340px]"
+                    maxHeightClass="flex-1 min-h-[220px] sm:min-h-[340px]"
                   />
                 ) : previewBlobUrl && isImageDoc(selectedDoc) ? (
                   <div className="flex-1 min-h-0 overflow-auto flex items-center justify-center bg-white rounded-xl border border-slate-200 p-3">
@@ -2830,7 +3126,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               <div
                 className={`${
                   isPreviewExpanded ? 'hidden' : 'lg:col-span-5 lg:h-full lg:overflow-y-auto'
-                } p-5 space-y-3.5`}
+                } p-4 sm:p-5 pb-[max(1rem,env(safe-area-inset-bottom))] space-y-3.5`}
               >
                 <div className="flex items-center justify-between gap-2">
                   <h4 className="text-xs font-bold text-slate-900">

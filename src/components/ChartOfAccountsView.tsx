@@ -449,8 +449,8 @@ export const ChartOfAccountsView: React.FC<ChartOfAccountsViewProps> = ({
       {/* Main Container */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         {/* Actions & Filters Toolbar */}
-        <div className="p-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-slate-50/60">
-          <div className="flex items-center gap-2 flex-1 min-w-[260px]">
+        <div className="p-3 sm:p-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-slate-50/60">
+          <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0 w-full sm:w-auto sm:min-w-[240px]">
             <div className="relative w-full max-w-sm">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
               <input
@@ -701,8 +701,8 @@ export const ChartOfAccountsView: React.FC<ChartOfAccountsViewProps> = ({
 
       {/* MODAL: NOVA CONTA CONTÁBIL */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full max-h-[92dvh] overflow-y-auto p-4 sm:p-6 shadow-2xl border border-slate-200 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-xl bg-teal-100 text-teal-800">
@@ -719,7 +719,7 @@ export const ChartOfAccountsView: React.FC<ChartOfAccountsViewProps> = ({
             </div>
 
             <form onSubmit={handleCreateAccount} className="space-y-3.5 text-xs">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Código Contábil *</label>
                   <input
@@ -758,7 +758,7 @@ export const ChartOfAccountsView: React.FC<ChartOfAccountsViewProps> = ({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Natureza do Saldo</label>
                   <select
@@ -839,8 +839,8 @@ export const ChartOfAccountsView: React.FC<ChartOfAccountsViewProps> = ({
 
       {/* MODAL: IMPORTAR PLANO DE CONTAS VIA CSV/TXT */}
       {showImportModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl max-w-xl w-full max-h-[92dvh] overflow-y-auto p-4 sm:p-6 shadow-2xl border border-slate-200 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-xl bg-teal-100 text-teal-800">

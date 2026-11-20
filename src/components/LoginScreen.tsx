@@ -94,7 +94,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   };
 
   return (
-    <div className="min-h-screen relative flex items-center justify-center p-4 sm:p-6 lg:p-8 font-sans overflow-hidden bg-slate-100">
+    <div className="min-h-[100dvh] relative flex items-center justify-center p-3 sm:p-6 lg:p-8 font-sans overflow-x-hidden overflow-y-auto bg-slate-100">
       {/* Blurred Modern Executive Office Background matching image */}
       <div 
         className="absolute inset-0 bg-cover bg-center filter blur-[6px] opacity-75 scale-105"
@@ -106,10 +106,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       <div className="absolute inset-0 bg-gradient-to-tr from-slate-900/40 via-teal-950/20 to-white/40" />
 
       {/* Main Login Card - Dual Pane Layout matching image_05d41d02.png */}
-      <div className="relative z-10 w-full max-w-4xl bg-white rounded-3xl shadow-2xl shadow-teal-950/30 overflow-hidden border border-white/60 flex flex-col md:flex-row min-h-[520px]">
+      <div className="relative z-10 w-full max-w-4xl bg-white rounded-2xl sm:rounded-3xl shadow-2xl shadow-teal-950/30 overflow-hidden border border-white/60 flex flex-col md:flex-row min-h-0 md:min-h-[520px]">
         
         {/* Left Pane: Vibrant Teal/Cyan Gradient with Brand, Digital Waves and Badges */}
-        <div className="md:w-[48%] bg-gradient-to-br from-[#00bfa5] via-[#009688] to-[#00695c] p-8 sm:p-10 flex flex-col justify-between text-white relative overflow-hidden">
+        <div className="md:w-[48%] bg-gradient-to-br from-[#00bfa5] via-[#009688] to-[#00695c] p-6 sm:p-10 flex flex-col justify-between text-white relative overflow-hidden">
           {/* Subtle wave decoration */}
           <div className="absolute inset-0 opacity-15 pointer-events-none">
             <svg viewBox="0 0 400 400" className="w-full h-full" preserveAspectRatio="none">
@@ -177,7 +177,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         </div>
 
         {/* Right Pane: White Form matching image with Acesse Sua Conta */}
-        <div className="md:w-[52%] bg-white p-8 sm:p-10 flex flex-col justify-between">
+        <div className="md:w-[52%] bg-white p-6 sm:p-10 flex flex-col justify-between">
           <div>
             {/* Header matching image */}
             <div className="mb-6">
@@ -187,7 +187,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               <p className="text-xs sm:text-sm text-slate-500 mt-1 font-medium flex items-center gap-2">
                 <span>Bem-vindo ao <span className="text-teal-700 font-bold">ContSuite</span></span>
                 <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-teal-50 text-teal-700 border border-teal-200">
-                  v1.0
+                  v1.1
                 </span>
               </p>
             </div>
@@ -387,27 +387,26 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
       {/* Help Modal */}
       {showHelpModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full max-h-[90dvh] overflow-y-auto p-5 sm:p-6 shadow-2xl space-y-4">
             <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
               <Sparkles className="w-5 h-5 text-teal-600" />
-              Central de Ajuda ContSuite
+              Central de Ajuda ContSuite v1.1
             </h3>
             <div className="text-xs text-slate-600 space-y-2.5 leading-relaxed">
               <p>
-                <strong>Como funciona o acesso?</strong><br />
-                O sistema é administrado por Rodrigo Bento. Novos clientes recebem um convite por e-mail e acessam somente a sua própria empresa.
+                <strong>Isolamento por Conta &amp; Acesso:</strong><br />
+                Cada usuário visualiza estritamente os dados, documentos e empresas cadastrados em sua própria conta, com persistência segura da sessão.
               </p>
               <p>
                 <strong>Esqueceu sua senha?</strong><br />
-                Basta utilizar a autenticação direta pelo Google com o mesmo e-mail cadastrado ou solicitar a reemissão ao administrador.
+                Utilize a autenticação direta pelo Google com o mesmo e-mail cadastrado ou solicite a reemissão ao administrador do escritório.
               </p>
               <p>
-                <strong>Módulos do ContSuite:</strong><br />
-                • Conversor de Extrato Bancário para OFX com IA.<br />
-                • Controle de Ativo Permanente & Depreciação CPC 27.<br />
-                • Controle Financeiro de Honorários Contábeis.<br />
-                • Exportação para Domínio Sistemas, Questor, etc.
+                <strong>Recursos da Versão 1.1:</strong><br />
+                • Câmera mobile e envio de fotos convertidos automaticamente para PDF ultracomprimido e sincronizados na hora.<br />
+                • Arquivos &amp; Kanban: Notas Fiscais processadas geram OFX automaticamente, com seleção múltipla (radio) para unir vários documentos em 1 único arquivo OFX.<br />
+                • Conversor OFX c/ IA, Ativo Permanente CPC 27, Honorários e Exportação contábil (Domínio, NG/Keevo, Questor).
               </p>
             </div>
             <button

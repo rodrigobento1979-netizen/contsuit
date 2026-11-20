@@ -51,44 +51,45 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     // Exact green/teal color from the login screen (#00897b / #009688)
-    <header className="bg-gradient-to-r from-[#00796b] via-[#00897b] to-[#00695c] text-white shadow-md z-20 border-b border-[#004d40]">
-      <div className="px-4 sm:px-6 py-2.5 flex items-center justify-between gap-4">
+    <header className="bg-gradient-to-r from-[#00796b] via-[#00897b] to-[#00695c] text-white shadow-md z-20 border-b border-[#004d40] w-full max-w-full overflow-hidden">
+      <div className="px-3 sm:px-6 py-2.5 flex items-center justify-between gap-2 sm:gap-4">
         
         {/* Left: Mobile Menu Toggle + Current Section Breadcrumb */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
           {onToggleMobileMenu && (
             <button
               onClick={onToggleMobileMenu}
-              className="md:hidden p-1.5 rounded-lg bg-black/15 text-white hover:bg-black/25 cursor-pointer"
+              className="md:hidden p-1.5 rounded-lg bg-black/15 text-white hover:bg-black/25 cursor-pointer shrink-0"
+              aria-label="Abrir menu"
             >
               <Menu className="w-5 h-5" />
             </button>
           )}
 
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm sm:text-base font-extrabold tracking-tight text-white leading-tight">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 min-w-0">
+              <h2 className="text-xs sm:text-base font-extrabold tracking-tight text-white leading-tight truncate">
                 {currentInfo.title}
               </h2>
-              <span className="hidden sm:inline-block text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-white/15 text-[#e0f2f1] border border-white/20">
-                ContSuite v1.0
+              <span className="hidden sm:inline-block text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-white/15 text-[#e0f2f1] border border-white/20 shrink-0">
+                ContSuite v1.1
               </span>
             </div>
-            <p className="text-[11px] text-[#b2dfdb] hidden sm:block">
+            <p className="text-[11px] text-[#b2dfdb] hidden sm:block truncate">
               {currentInfo.subtitle}
             </p>
           </div>
         </div>
 
         {/* Right: Company Switcher, Cloud Status & User Session */}
-        <div className="flex items-center gap-3 text-xs">
+        <div className="flex items-center gap-1.5 sm:gap-3 text-xs shrink-0">
           {/* Active Company Selector (Strictly Master Admin only; non-Master sees fixed logged-in company) */}
           {isMaster ? (
             <div
-              className="flex items-center gap-1.5 bg-black/20 px-2.5 py-1 rounded-xl border border-white/15"
+              className="flex items-center gap-1.5 bg-black/20 px-2 sm:px-2.5 py-1 rounded-xl border border-white/15"
               title={`Acesso amplo Administrador Master: ${allCompanies.length} empresas disponíveis`}
             >
-              <Building2 className="w-3.5 h-3.5 text-[#80cbc4]" />
+              <Building2 className="w-3.5 h-3.5 text-[#80cbc4] shrink-0" />
               <label htmlFor="top-company-select" className="text-[#e0f2f1] font-medium hidden md:inline text-[11px]">
                 Empresa ({allCompanies.length}):
               </label>
@@ -96,7 +97,7 @@ export const Header: React.FC<HeaderProps> = ({
                 id="top-company-select"
                 value={currentCompany?.id || ''}
                 onChange={(e) => onSwitchCompany(e.target.value)}
-                className="bg-[#004d40] text-white font-bold border border-[#00bfa5]/40 rounded-lg px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-[#80cbc4] cursor-pointer max-w-[210px]"
+                className="bg-[#004d40] text-white font-bold border border-[#00bfa5]/40 rounded-lg px-1.5 sm:px-2 py-0.5 text-[11px] sm:text-xs focus:outline-none focus:ring-1 focus:ring-[#80cbc4] cursor-pointer max-w-[115px] sm:max-w-[210px] truncate"
               >
                 {allCompanies.map((c) => (
                   <option key={c.id} value={c.id} className="bg-slate-900 text-white">

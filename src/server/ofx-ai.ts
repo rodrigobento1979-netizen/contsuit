@@ -174,9 +174,89 @@ ${transactionsXml}
 }
 
 /**
- * Heurística de fallback para processar extratos bancários em texto
+ * Parser determinístico para XML de Nota Fiscal (NF-e / NFS-e / CT-e) para OFX
+ */
+function tryParseFiscalXmlToStatement(rawText: string, bankHint?: string): StatementExtractionResult | null {
+  const lower = (rawText || '').toLowerCase();
+  if (
+    !lower.includes('<nfe') &&
+    !lower.includes('<infnfe') &&
+    !lower.includes('<nfse') &&
+    !lower.includes('<compnfse') &&
+    !lower.includes('<cte')
+  ) {
+    return null;
+  }
+
+  const pickTag = (tagNames: string[]): string => {
+    for (const tag of tagNames) {
+      const m = rawText.match(new RegExp(`<(?:[a-z0-9]+:)?${tag}[^>]*>([^<]+)<\\/(?:[a-z0-9]+:)?${tag}>`, 'i'));
+      if (m && m[1]?.trim()) return m[1].trim();
+    }
+    return '';
+  };
+
+  const nfNum = pickTag(['nNF', 'Numero', 'nCT']);
+  const emitSection = rawText.match(/<(?:[a-z0-9]+:)?(?:emit|PrestadorServico|IdentificacaoPrestador)[\s\S]*?<\/(?:[a-z0-9]+:)?(?:emit|PrestadorServico|IdentificacaoPrestador)>/i)?.[0] || rawText;
+  const emitNameMatch = emitSection.match(/<(?:[a-z0-9]+:)?(?:xNome|RazaoSocial|xFant)[^>]*>([^<]+)<\//i);
+  const emitCnpjMatch = emitSection.match(/<(?:[a-z0-9]+:)?CNPJ[^>]*>([0-9]{14})<\//i);
+  const emitterName = emitNameMatch?.[1]?.trim() || 'Fornecedor / Emissor NF';
+
+  let formattedCnpj: string | undefined;
+  if (emitCnpjMatch?.[1]) {
+    const d = emitCnpjMatch[1];
+    formattedCnpj = `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12, 14)}`;
+  }
+
+  const rawDate = pickTag(['dhEmi', 'dEmi', 'DataEmissao', 'Competencia']);
+  let txDate = new Date().toISOString().slice(0, 10);
+  const isoDateMatch = rawDate.match(/(\d{4}-\d{2}-\d{2})/);
+  if (isoDateMatch) {
+    txDate = isoDateMatch[1];
+  } else {
+    const brDateMatch = rawDate.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    if (brDateMatch) txDate = `${brDateMatch[3]}-${brDateMatch[2]}-${brDateMatch[1]}`;
+  }
+
+  const rawVal = pickTag(['vNF', 'ValorLiquidoNfse', 'ValorServicos', 'vTPrest', 'vProd']);
+  const amount = Math.abs(parseFloat(rawVal.replace(',', '.')) || 0);
+  if (amount <= 0) return null;
+
+  const memo = `${nfNum ? `NF ${nfNum}` : 'NOTA FISCAL'} - ${emitterName}`.slice(0, 120);
+  return {
+    bankName: bankHint || 'Escrituração Fiscal (NF-e / NFS-e)',
+    bankCode: '999',
+    agency: '0001',
+    accountNumber: 'NF-OFX',
+    accountType: 'BUSINESS',
+    startDate: txDate,
+    endDate: txDate,
+    openingBalance: 0,
+    closingBalance: -amount,
+    extractedCnpj: formattedCnpj,
+    extractedCompanyName: emitterName,
+    totalPages: 1,
+    pagesProcessed: 1,
+    transactions: [
+      {
+        date: txDate,
+        type: 'DEBIT',
+        amount: Number(amount.toFixed(2)),
+        memo,
+        fitid: `${txDate.replace(/-/g, '')}${nfNum ? nfNum.replace(/\D/g, '').slice(-6).padStart(6, '0') : '000001'}`,
+        documentNumber: nfNum || undefined,
+      },
+    ],
+  };
+}
+
+/**
+ * Heurística de fallback para processar extratos bancários e documentos fiscais em texto
  */
 function parseStatementWithRegex(rawText: string, bankHint?: string): StatementExtractionResult {
+  const xmlParsed = tryParseFiscalXmlToStatement(rawText, bankHint);
+  if (xmlParsed) return xmlParsed;
+
   const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
 
   let bankName = bankHint || 'Banco Comercial Brasileiro';
@@ -419,21 +499,18 @@ export async function extractStatementChunkWithAI(params: {
     ? `\nIMPORTANTE: Você está analisando especificamente ${params.pageRangeLabel} do extrato bancário. Extraia 100% de TODAS as linhas/lançamentos visíveis em TODAS as páginas deste trecho, do primeiro ao último item, sem pular, agrupar ou resumir nenhuma transação.`
     : `\nIMPORTANTE: Extraia 100% de TODAS as transações presentes em TODAS as páginas fornecidas, linha por linha, do início ao fim, sem omitir ou resumir nenhum lançamento.`;
 
-  const promptText = `Você é um auditor contábil especialista em extratos bancários brasileiros (Itaú, Bradesco, Santander, Banco do Brasil, Caixa, Nubank, Inter, Sicredi, Sicoob, C6, BTG, Safra, etc.).
-Analise detalhadamente o extrato bancário fornecido (imagem, PDF ou texto) e extraia com precisão absoluta todas as transações financeiras para posterior conversão em arquivo OFX bancário.${scopeNote}
+  const promptText = `Você é um auditor contábil especialista em extratos bancários e documentos fiscais brasileiros (Itaú, Bradesco, Santander, Banco do Brasil, Caixa, Nubank, Inter, Sicredi, Sicoob, C6, BTG, Safra, NF-e, NFS-e, DANFE, DARF, DAS e Comprovantes).
+Analise detalhadamente o documento fornecido (imagem, PDF ou texto) e extraia com precisão absoluta as transações financeiras para conversão em arquivo OFX.${scopeNote}
 
 Regras rígidas:
-1. Identifique o Nome do Banco e o Código do Banco Oficial (Ex: 001 para Banco do Brasil, 341 para Itaú, 237 para Bradesco, 033 para Santander, 104 para Caixa, 260 para Nubank, 077 para Inter, 756 para Sicoob, 748 para Sicredi, 336 para C6). Se não aparecer nesta página, use vazio "" ou "000".
-2. Identifique a Agência e Número da Conta Bancária se visíveis.
-3. Identifique o CNPJ do titular/empresa correntista (formato XX.XXX.XXX/XXXX-XX) e o Nome/Razão Social da Empresa se constarem.
-4. Identifique o período do trecho (Data Inicial e Data Final no formato YYYY-MM-DD).
-5. Para CADA transação listada nas tabelas/páginas (não ignore nenhuma linha de pagamento, PIX, TED, tarifa, rendimento, resgate/aplicação automática ou débito/crédito):
-   - Data no formato estrito 'YYYY-MM-DD'. (Se o extrato mostrar apenas DD/MM, utilize o ano do cabeçalho/período do extrato).
-   - Tipo de transação: 'DEBIT' para saídas/pagamentos/tarifas/envios/sinais negativos ou letra D; 'CREDIT' para entradas/recebimentos/depósitos/créditos ou letra C.
-   - Valor numérico positivo (ex: 150.50).
-   - Descrição/Histórico (memo) fiel e conciso (máximo 120 caracteres).
-   - Não inclua linhas de "Saldo do Dia", "Saldo Anterior" ou "Saldo Disponível" como transações, apenas movimentações reais.
-6. Saldo inicial e Saldo final se constarem claramente no trecho.`;
+1. Se for um EXTRATO BANCÁRIO:
+   - Identifique Nome do Banco e Código do Banco Oficial (Ex: 001 BB, 341 Itaú, 237 Bradesco, 033 Santander, 104 Caixa, 260 Nubank, 077 Inter, 756 Sicoob, 748 Sicredi).
+   - Identifique Agência, Número da Conta, CNPJ e Nome/Razão Social se visíveis.
+   - Extraia 100% das transações (data YYYY-MM-DD, DEBIT para saídas/D/-, CREDIT para entradas/C/+, valor positivo, histórico conciso <= 120 caracteres). Não inclua linhas de Saldo Anterior/Saldo do Dia como transação.
+2. Se for uma NOTA FISCAL (NF-e, NFS-e, NFC-e, DANFE, Cupom Fiscal), GUIA DE IMPOSTO (DARF, DAS, FGTS, INSS) ou COMPROVANTE/RECIBO:
+   - Extraia a transação financeira correspondente ao documento: data de emissão/pagamento/vencimento (YYYY-MM-DD), tipo 'DEBIT' (para compras, serviços tomados, guias de imposto ou pagamentos) ou 'CREDIT' (quando explicitamente receita/recebimento), valor total do documento (positivo), e descrição clara no formato "NF [número] - [Fornecedor/Emitente]" ou "[Tipo] - [Órgão/Emissor]" (<= 120 caracteres).
+   - Use bankName "Escrituração Fiscal / Documentos" (caso não haja banco) e bankCode "999".
+3. Identifique Data Inicial, Data Final (YYYY-MM-DD) e saldos se disponíveis.`;
 
   let effectiveRawText = params.rawText || '';
   let effectiveBase64 = params.fileBase64;
@@ -442,10 +519,12 @@ Regras rígidas:
     effectiveMime = 'image/jpeg';
   }
 
-  // Decode text/OFX/octet-stream base64 payloads into rawText instead of sending unsupported MIME types to inlineData
+  // Decode text/XML/OFX/octet-stream base64 payloads into rawText instead of sending unsupported MIME types to inlineData
   if (
     effectiveBase64 &&
     (effectiveMime.startsWith('text/') ||
+      effectiveMime.includes('xml') ||
+      effectiveMime === 'application/json' ||
       effectiveMime === 'application/octet-stream' ||
       effectiveMime === 'application/x-ofx')
   ) {
@@ -807,6 +886,25 @@ export async function parseStatementWithAI(params: {
   rawText?: string;
   bankHint?: string;
 }): Promise<StatementExtractionResult> {
+  // Fast deterministic path for XML NF-e / NFS-e / CT-e
+  let decodedTextCheck = params.rawText || '';
+  const mimeLower = (params.mimeType || '').toLowerCase();
+  if (
+    !decodedTextCheck &&
+    params.fileBase64 &&
+    (mimeLower.includes('xml') || mimeLower.startsWith('text/'))
+  ) {
+    try {
+      decodedTextCheck = Buffer.from(params.fileBase64, 'base64').toString('utf-8');
+    } catch {}
+  }
+  if (decodedTextCheck) {
+    const xmlStmt = tryParseFiscalXmlToStatement(decodedTextCheck, params.bankHint);
+    if (xmlStmt) {
+      return xmlStmt;
+    }
+  }
+
   const ai = getAiClient();
 
   if (ai) {

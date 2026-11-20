@@ -465,7 +465,7 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
 
           {/* Search & Filter Toolbar */}
           <div className="p-3 border-b border-slate-100 bg-slate-50/70 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2 flex-1 min-w-[200px] max-w-md">
+            <div className="flex items-center gap-2 flex-1 min-w-0 w-full sm:w-auto sm:min-w-[200px] max-w-md">
               <div className="relative w-full">
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
                 <input
@@ -906,8 +906,8 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
 
       {/* MODAL: CONVIDAR NOVO USUÁRIO */}
       {showInviteModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full max-h-[92dvh] overflow-y-auto p-4 sm:p-6 shadow-2xl border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-200">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-xl bg-teal-100 text-teal-800">
@@ -1069,8 +1069,8 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
 
       {/* MODAL: PREVIEW DO E-MAIL DE CONVITE */}
       {emailModalData && (
-        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-xl w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl max-w-xl w-full max-h-[92dvh] overflow-y-auto p-4 sm:p-6 shadow-2xl border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-200">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-xl bg-emerald-100 text-emerald-700">
@@ -1227,8 +1227,8 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
 
       {/* MODAL DE CONFIRMAÇÃO DE SENHA PARA SIMULAR PERFIL (EXCETO ADMIN MASTER) */}
       {passwordTargetUser && (
-        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-slate-200 space-y-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full max-h-[92dvh] overflow-y-auto p-4 sm:p-5 shadow-2xl border border-slate-200 space-y-4">
             <div className="flex items-center justify-between pb-2 border-b border-slate-100">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center border border-amber-200">
@@ -1446,8 +1446,8 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
 
                 {/* Form SMTP */}
                 <div className="space-y-3 text-xs">
-                  <div className="grid grid-cols-3 gap-2">
-                    <div className="col-span-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div className="sm:col-span-2">
                       <label className="text-slate-700 font-semibold block mb-1">Servidor SMTP (Host):</label>
                       <input
                         type="text"
@@ -1592,8 +1592,8 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                     </label>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-2">
-                    <div className="col-span-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div className="sm:col-span-2">
                       <label className="text-slate-700 font-semibold block mb-1">Servidor IMAP (Host):</label>
                       <input
                         type="text"

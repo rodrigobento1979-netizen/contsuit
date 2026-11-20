@@ -90,18 +90,18 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-5">
+    <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+      <div className="bg-white rounded-2xl max-w-lg w-full max-h-[92dvh] overflow-y-auto p-4 sm:p-6 shadow-2xl border border-slate-200 space-y-5">
         
         {/* Header */}
-        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#004d40] to-[#00897b] flex items-center justify-center text-white font-bold text-sm shadow-2xs">
+        <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-100">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#004d40] to-[#00897b] flex items-center justify-center text-white font-bold text-sm shadow-2xs shrink-0">
               {currentUser.name.charAt(0)}
             </div>
-            <div>
-              <h3 className="font-bold text-slate-900 text-sm">{currentUser.name}</h3>
-              <p className="text-xs text-slate-500">{currentUser.email}</p>
+            <div className="min-w-0">
+              <h3 className="font-bold text-slate-900 text-sm truncate">{currentUser.name}</h3>
+              <p className="text-xs text-slate-500 truncate">{currentUser.email}</p>
             </div>
           </div>
           <button
@@ -109,7 +109,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
               setChallengeUser(null);
               onClose();
             }}
-            className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+            className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer shrink-0"
           >
             <X className="w-5 h-5" />
           </button>

@@ -62,7 +62,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   return (
-    <aside className="w-64 bg-gradient-to-b from-[#004d40] via-[#00695c] to-[#004d40] text-white flex flex-col shrink-0 border-r border-[#00332c] shadow-xl z-30 select-none overflow-x-hidden">
+    <aside className="w-64 h-[100dvh] md:h-screen bg-gradient-to-b from-[#004d40] via-[#00695c] to-[#004d40] text-white flex flex-col shrink-0 border-r border-[#00332c] shadow-xl z-30 select-none overflow-x-hidden">
       
       {/* Brand Header */}
       <div className="p-4 border-b border-teal-800/40">
@@ -330,26 +330,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           {openGroup === 'configuracoes' && (
             <div className="space-y-1 pl-1">
-              {/* Banco de Dados */}
-              <button
-                onClick={() => setActiveTab('database')}
-                className={`w-full text-left px-3 py-2 rounded-xl transition cursor-pointer flex items-center justify-between text-xs font-semibold ${
-                  activeTab === 'database'
-                    ? 'bg-[#00897b] text-white shadow-md shadow-teal-950/20 font-bold border-l-4 border-[#00bfa5]'
-                    : 'text-teal-100/90 hover:text-white hover:bg-white/10'
-                }`}
-              >
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <Database className={`w-4 h-4 shrink-0 ${activeTab === 'database' ? 'text-[#a7ffeb]' : 'text-teal-300'}`} />
-                  <div className="truncate">
-                    <span className="block truncate">Banco de Dados</span>
-                    <span className="text-[10px] opacity-75 font-normal block truncate">
-                      Backup, Restore & Limpeza
-                    </span>
+              {/* Banco de Dados (Master Admin only) */}
+              {isMaster && (
+                <button
+                  onClick={() => setActiveTab('database')}
+                  className={`w-full text-left px-3 py-2 rounded-xl transition cursor-pointer flex items-center justify-between text-xs font-semibold ${
+                    activeTab === 'database'
+                      ? 'bg-[#00897b] text-white shadow-md shadow-teal-950/20 font-bold border-l-4 border-[#00bfa5]'
+                      : 'text-teal-100/90 hover:text-white hover:bg-white/10'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <Database className={`w-4 h-4 shrink-0 ${activeTab === 'database' ? 'text-[#a7ffeb]' : 'text-teal-300'}`} />
+                    <div className="truncate">
+                      <span className="block truncate">Banco de Dados</span>
+                      <span className="text-[10px] opacity-75 font-normal block truncate">
+                        Backup, Restore & Limpeza
+                      </span>
+                    </div>
                   </div>
-                </div>
-                {activeTab === 'database' && <ChevronRight className="w-3.5 h-3.5 text-[#a7ffeb] shrink-0" />}
-              </button>
+                  {activeTab === 'database' && <ChevronRight className="w-3.5 h-3.5 text-[#a7ffeb] shrink-0" />}
+                </button>
+              )}
 
               {/* Usuários & Convites */}
               {isMaster && (
@@ -383,19 +385,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
             type="button"
             onClick={onOpenHelpModal}
             className="w-full text-left px-3 py-2.5 rounded-xl bg-sky-300 hover:bg-sky-200 border border-sky-200 text-slate-900 transition cursor-pointer flex items-center justify-between text-xs shadow-sm"
-            title="Abrir Central de Ajuda, Novidades e Manual do ContSuite v1.0"
+            title="Abrir Central de Ajuda, Novidades e Manual do ContSuite v1.1"
           >
             <div className="flex items-center gap-2.5 min-w-0">
               <HelpCircle className="w-4 h-4 text-sky-800 shrink-0" />
               <div className="truncate">
                 <span className="block truncate font-extrabold text-slate-900">Ajuda & Novidades</span>
                 <span className="text-[10px] text-sky-900 font-semibold block truncate">
-                  Funções do Sistema · v1.0
+                  Funções do Sistema · v1.1
                 </span>
               </div>
             </div>
             <span className="px-1.5 py-0.5 rounded bg-sky-700 text-white font-black text-[9px] shrink-0">
-              v1.0
+              v1.1
             </span>
           </button>
         </div>
@@ -403,7 +405,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </nav>
 
       {/* Footer / User Profile in Sidebar */}
-      <div className="p-3 border-t border-teal-800/40 bg-black/15 space-y-2">
+      <div className="p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-teal-800/40 bg-black/15 space-y-2 shrink-0">
         <button
           onClick={onOpenUserModal}
           className="w-full text-left p-2 rounded-xl hover:bg-white/10 transition cursor-pointer flex items-center justify-between text-xs"
@@ -421,7 +423,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </p>
             </div>
           </div>
-          <span className="text-[10px] font-mono text-teal-300/80 shrink-0">v1.0</span>
+          <span className="text-[10px] font-mono text-teal-300/80 shrink-0">v1.1</span>
         </button>
 
         <button

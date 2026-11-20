@@ -32,6 +32,10 @@ import { ReportPrintModal, ReportColumn } from './ReportPrintModal';
 import { PdfCanvasViewer } from './PdfCanvasViewer';
 import { useOfxAgent } from '../context/OfxAgentContext';
 import { getBlobFromIdb, saveBlobToIdb } from '../utils/fileStorage';
+import {
+  convertImageFileToCompressedPdfFile,
+  isImageFile,
+} from '../utils/imageToCompressedPdf';
 
 /**
  * Robust fallback parser to reconstruct transactions list directly from OFX text
@@ -273,13 +277,29 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
   const [showConsolidatedReport, setShowConsolidatedReport] = useState(false);
 
   // File handling
-  const handleFileSelect = (file: File) => {
-    setSelectedFile(file);
+  const handleFileSelect = async (rawFile: File) => {
     setLocalErrorMessage(null);
     if (manualJob?.status !== 'processing') {
       clearManualJob();
     }
     setPdfPageCount(null);
+
+    let file = rawFile;
+    if (isImageFile(rawFile)) {
+      try {
+        const converted = await convertImageFileToCompressedPdfFile(rawFile);
+        file = converted.pdfFile;
+        setSelectedFile(file);
+        setFileBase64(converted.base64);
+        setFileMimeType('application/pdf');
+        setPdfPageCount(1);
+        return;
+      } catch (err) {
+        console.warn('Falha ao converter foto para PDF comprimido no Conversor OFX:', err);
+      }
+    }
+
+    setSelectedFile(file);
 
     const reader = new FileReader();
     reader.onload = async () => {
@@ -1184,8 +1204,8 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
 
       {/* MODAL: VISUALIZAR EXTRATO, LANÇAMENTOS E OFX */}
       {previewStatement && (
-        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 animate-in fade-in">
-          <div className="bg-white rounded-2xl max-w-5xl w-full max-h-[94vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden">
+        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-0 sm:p-4 animate-in fade-in">
+          <div className="bg-white rounded-none sm:rounded-2xl max-w-5xl w-full h-[100dvh] sm:h-auto sm:max-h-[92dvh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden">
             {/* Header */}
             <div className="p-3.5 sm:p-4 border-b border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-2.5 min-w-0">
@@ -1284,7 +1304,7 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
             </div>
 
             {/* Content Body */}
-            <div className="p-4 flex-1 overflow-y-auto bg-slate-100/60 min-h-[480px]">
+            <div className="p-3 sm:p-4 flex-1 min-h-0 overflow-y-auto bg-slate-100/60">
               {/* TAB 1: TRANSACTIONS & SUMMARY */}
               {previewTab === 'transactions' && (
                 <div className="space-y-3.5">
@@ -1444,7 +1464,7 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
                 <div className="space-y-2.5">
                   {previewStatement.fileBase64 ? (
                     previewStatement.fileMimeType?.includes('image') ? (
-                      <div className="bg-white rounded-xl p-3 border border-slate-200 flex items-center justify-center min-h-[480px]">
+                      <div className="bg-white rounded-xl p-3 border border-slate-200 flex items-center justify-center min-h-[240px] sm:min-h-[420px]">
                         <img
                           src={`data:${previewStatement.fileMimeType || 'image/png'};base64,${previewStatement.fileBase64}`}
                           alt="Extrato Original"
@@ -1474,7 +1494,7 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
             </div>
 
             {/* Footer */}
-            <div className="p-3 bg-white border-t border-slate-200 flex items-center justify-between text-xs">
+            <div className="p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-white border-t border-slate-200 flex items-center justify-between text-xs shrink-0">
               <span className="text-[11px] text-slate-400">
                 ContSuite • Conciliação Bancária & OFX
               </span>
@@ -1493,7 +1513,7 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
       {/* CONFIRM DELETE MODAL */}
       {deletingId && (
         <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3">
-          <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-slate-200 space-y-3">
+          <div className="bg-white rounded-2xl max-w-md w-full max-h-[90dvh] overflow-y-auto p-5 shadow-2xl border border-slate-200 space-y-3">
             <div className="flex items-center gap-2.5 text-rose-600">
               <div className="w-8 h-8 rounded-lg bg-rose-50 flex items-center justify-center">
                 <Trash2 className="w-4 h-4" />

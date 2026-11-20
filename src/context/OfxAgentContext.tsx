@@ -90,6 +90,8 @@ interface OfxAgentContextValue {
   setScheduleMode: (mode: OfxAgentScheduleMode) => void;
   isSweeping: boolean;
   isProcessingOtherDocs: boolean;
+  isConvertingBatchOfx: boolean;
+  batchOfxProgress: { current: number; total: number; label: string } | null;
   activeQueueCount: number;
   activeDocProcessCount: number;
   docJobs: Record<string, DocOfxJobState>;
@@ -108,6 +110,10 @@ interface OfxAgentContextValue {
   skipUnregisteredCompany: () => void;
   enqueueDocumentForOfx: (doc: CompanyDocument, preloadedBase64?: string) => void;
   enqueueNonExtratoProcessing: (doc: CompanyDocument, preloadedBase64?: string) => void;
+  convertMultipleDocsToSingleOfx: (
+    docs: CompanyDocument[],
+    resolveBase64Fn?: (doc: CompanyDocument) => Promise<string | null>
+  ) => Promise<ConvertedStatement | null>;
   runPendingSweep: (docsOverride?: CompanyDocument[]) => Promise<number>;
   runPendingNonExtratoSweep: (docsOverride?: CompanyDocument[]) => Promise<number>;
   lastDocumentPatch: { docId: string; patch: Partial<CompanyDocument>; ts: number } | null;
@@ -196,6 +202,50 @@ async function compressImageIfNeeded(
   }
 }
 
+function buildFallbackExtractionFromDoc(doc: Partial<CompanyDocument>, fallbackName?: string) {
+  const date =
+    (doc.documentDate && /^\d{4}-\d{2}-\d{2}/.test(doc.documentDate) ? doc.documentDate.slice(0, 10) : '') ||
+    (doc.competenceMonth && /^\d{4}-\d{2}/.test(doc.competenceMonth) ? `${doc.competenceMonth}-01` : '') ||
+    new Date().toISOString().slice(0, 10);
+  const amount = typeof doc.amount === 'number' && !isNaN(doc.amount) && doc.amount > 0 ? Math.abs(doc.amount) : 0;
+  if (amount <= 0) return null;
+
+  const prefix =
+    doc.category === 'nota_fiscal'
+      ? 'NF'
+      : doc.category === 'guia_imposto'
+        ? 'Guia'
+        : doc.category === 'comprovante'
+          ? 'Comprov.'
+          : 'Doc.';
+  const memoParts = [
+    prefix,
+    doc.documentNumber ? `Nº ${doc.documentNumber}` : '',
+    doc.issuerOrBank || doc.fileName || fallbackName || 'Documento Fiscal',
+  ].filter(Boolean);
+
+  return {
+    bankName: doc.issuerOrBank || 'Documentos Fiscais / Contábeis',
+    bankCode: '000',
+    agency: '0001',
+    accountNumber: 'FISCAL-01',
+    accountType: 'BUSINESS' as const,
+    startDate: date,
+    endDate: date,
+    openingBalance: 0,
+    closingBalance: -amount,
+    transactions: [
+      {
+        date,
+        type: 'DEBIT' as const,
+        amount,
+        memo: memoParts.join(' - ').slice(0, 120),
+        fitid: `${date.replace(/-/g, '')}${String(doc.id || '').replace(/[^a-zA-Z0-9]/g, '').slice(-6) || '0001'}`,
+      },
+    ],
+  };
+}
+
 async function convertBinaryToOfxStatement(params: {
   companyId: string;
   fileName: string;
@@ -204,6 +254,7 @@ async function convertBinaryToOfxStatement(params: {
   rawText?: string;
   bankHint?: string;
   sourceDocId?: string;
+  fallbackDocMeta?: Partial<CompanyDocument>;
   onProgress: (p: {
     totalPages: number;
     processedPages: number;
@@ -211,15 +262,28 @@ async function convertBinaryToOfxStatement(params: {
     statusLabel: string;
   }) => void;
 }): Promise<ConvertedStatement> {
-  const { companyId, fileName, mimeType, fileBase64, rawText, bankHint, sourceDocId, onProgress } = params;
+  const {
+    companyId,
+    fileName,
+    mimeType,
+    fileBase64,
+    rawText,
+    bankHint,
+    sourceDocId,
+    fallbackDocMeta,
+    onProgress,
+  } = params;
   const fileNameLower = fileName.toLowerCase();
-  const isPdf = mimeType === 'application/pdf' || fileNameLower.endsWith('.pdf');
+  const mimeLower = (mimeType || '').toLowerCase();
+  const isPdf = mimeLower === 'application/pdf' || fileNameLower.endsWith('.pdf');
   const isPlainTextOrOfx =
     Boolean(rawText) ||
     fileNameLower.endsWith('.txt') ||
     fileNameLower.endsWith('.ofx') ||
     fileNameLower.endsWith('.csv') ||
-    mimeType.startsWith('text/');
+    fileNameLower.endsWith('.xml') ||
+    mimeLower.includes('xml') ||
+    mimeLower.startsWith('text/');
 
   let finalData: any = null;
 
@@ -428,7 +492,7 @@ async function convertBinaryToOfxStatement(params: {
       totalPages: 1,
       processedPages: 0,
       foundTransactions: 0,
-      statusLabel: `Analisando extrato ${fileName} com IA...`,
+      statusLabel: `Analisando ${fileName} para OFX...`,
     });
 
     const payloadBody: any = {
@@ -443,7 +507,7 @@ async function convertBinaryToOfxStatement(params: {
     } else if (isPlainTextOrOfx && fileBase64) {
       try {
         payloadBody.rawText = new TextDecoder('utf-8').decode(
-          Uint8Array.from(atob(fileBase64), (c) => c.charCodeAt(0))
+          Uint8Array.from(atob(cleanBase64(fileBase64)), (c) => c.charCodeAt(0))
         );
       } catch {
         payloadBody.fileBase64 = fileBase64;
@@ -458,16 +522,52 @@ async function convertBinaryToOfxStatement(params: {
       payloadBody.mimeType = prepared.mimeType;
     }
 
-    const res = await fetch('/api/ofx/convert', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payloadBody),
-    });
-    const data = await parseSafeJson(res);
-    if (!res.ok || !data?.statement) {
-      throw new Error(data.error || 'Falha ao converter extrato para OFX.');
+    if (payloadBody.rawText || payloadBody.fileBase64) {
+      try {
+        const res = await fetch('/api/ofx/convert', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payloadBody),
+        });
+        const data = await parseSafeJson(res);
+        if (res.ok && data?.statement) {
+          finalData = data;
+        } else if (!fallbackDocMeta) {
+          throw new Error(data.error || 'Falha ao converter arquivo para OFX.');
+        }
+      } catch (err) {
+        if (!fallbackDocMeta) throw err;
+      }
     }
-    finalData = data;
+
+    // Fallback: synthesize OFX directly from fiscal document metadata (NF-e / Guia / Recibo) if binary had no bank table
+    if (!finalData && fallbackDocMeta) {
+      const fallbackChunk = buildFallbackExtractionFromDoc(fallbackDocMeta, fileName);
+      if (fallbackChunk) {
+        const finRes = await fetch('/api/ofx/finalize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chunks: [fallbackChunk],
+            totalPages: 1,
+            pagesProcessed: 1,
+            companyId,
+            fileName,
+            sourceDocId,
+            fileBase64: fileBase64 && fileBase64.length < 1_500_000 ? fileBase64 : undefined,
+            mimeType: mimeType || 'application/pdf',
+          }),
+        });
+        const finData = await parseSafeJson(finRes);
+        if (finRes.ok && finData?.statement) {
+          finalData = finData;
+        } else {
+          throw new Error(finData?.error || 'Falha ao gerar OFX do documento fiscal.');
+        }
+      } else {
+        throw new Error('Não foi possível identificar valores para gerar o OFX deste documento.');
+      }
+    }
   }
 
   const stmt: ConvertedStatement = finalData.statement;
@@ -528,6 +628,12 @@ export const OfxAgentProvider: React.FC<{
   const [docProcessJobs, setDocProcessJobs] = useState<Record<string, DocProcessingJobState>>({});
   const [isSweeping, setIsSweeping] = useState(false);
   const [isProcessingOtherDocs, setIsProcessingOtherDocs] = useState(false);
+  const [isConvertingBatchOfx, setIsConvertingBatchOfx] = useState(false);
+  const [batchOfxProgress, setBatchOfxProgress] = useState<{
+    current: number;
+    total: number;
+    label: string;
+  } | null>(null);
   const [recentStatements, setRecentStatements] = useState<ConvertedStatement[]>([]);
   const [lastDocumentPatch, setLastDocumentPatch] = useState<{
     docId: string;
@@ -664,7 +770,7 @@ export const OfxAgentProvider: React.FC<{
           }
         }
 
-        if (!base64) {
+        if (!base64 && !(doc.amount && doc.amount > 0)) {
           throw new Error('Arquivo binário não encontrado localmente ou no servidor.');
         }
 
@@ -673,8 +779,9 @@ export const OfxAgentProvider: React.FC<{
           fileName: doc.fileName,
           mimeType: doc.mimeType || 'application/pdf',
           fileBase64: base64,
-          bankHint: doc.issuerOrBank ? `Banco: ${doc.issuerOrBank}` : undefined,
+          bankHint: doc.issuerOrBank ? `Banco/Emissor: ${doc.issuerOrBank}` : undefined,
           sourceDocId: doc.id,
+          fallbackDocMeta: doc,
           onProgress: (p) => {
             setDocJobs((prev) => ({
               ...prev,
@@ -761,7 +868,6 @@ export const OfxAgentProvider: React.FC<{
     (doc: CompanyDocument, preloadedBase64?: string) => {
       if (!doc || !doc.id) return;
       if (queuedIdsRef.current.has(doc.id)) return;
-      if (doc.category !== 'extrato') return;
 
       queuedIdsRef.current.add(doc.id);
       queueRef.current.push({ doc, preloadedBase64 });
@@ -973,20 +1079,133 @@ export const OfxAgentProvider: React.FC<{
 
         await updateDocOfxMetadata(doc, patch);
 
+        // Immediately convert Nota Fiscal / Guia / Comprovante into an OFX statement so it appears in Conversor OFX
+        const enrichedDoc: CompanyDocument = {
+          ...doc,
+          ...patch,
+        };
+
         setDocProcessJobs((prev) => ({
           ...prev,
           [doc.id]: {
             docId: doc.id,
             companyId: doc.companyId,
             fileName: doc.fileName,
-            category: (patch.category as DocumentCategory) || doc.category,
-            status: 'done',
-            statusLabel: 'Dados extraídos e prontos para escrituração',
+            category: enrichedDoc.category,
+            status: 'processing',
+            statusLabel: 'Convertendo e enviando lançamento para o Conversor OFX...',
             accountingNotes: patch.notes,
           },
         }));
 
-        showToast(`Documento "${doc.fileName}" processado com IA!`);
+        let generatedStmt: ConvertedStatement | null = null;
+        try {
+          generatedStmt = await convertBinaryToOfxStatement({
+            companyId: doc.companyId,
+            fileName: doc.fileName,
+            mimeType: doc.mimeType || 'application/pdf',
+            fileBase64: base64,
+            rawText: textPreview,
+            bankHint: enrichedDoc.issuerOrBank
+              ? `Emissor/Fornecedor: ${enrichedDoc.issuerOrBank}${enrichedDoc.documentNumber ? ` | NF/Doc: ${enrichedDoc.documentNumber}` : ''}`
+              : undefined,
+            sourceDocId: doc.id,
+            fallbackDocMeta: enrichedDoc,
+            onProgress: (p) => {
+              setDocJobs((prev) => ({
+                ...prev,
+                [doc.id]: {
+                  docId: doc.id,
+                  companyId: doc.companyId,
+                  fileName: doc.fileName,
+                  status: 'processing',
+                  totalPages: p.totalPages,
+                  processedPages: p.processedPages,
+                  foundTransactions: p.foundTransactions,
+                  statusLabel: p.statusLabel,
+                },
+              }));
+            },
+          });
+        } catch (ofxErr: any) {
+          console.warn('Non-extrato OFX conversion fallback warning:', ofxErr?.message);
+          await updateDocOfxMetadata(enrichedDoc, {
+            ofxStatus: 'error',
+            ofxError: (ofxErr?.message || 'Não foi possível gerar OFX automático.').slice(0, 200),
+          });
+        }
+
+        if (generatedStmt) {
+          const normalizedStmt: ConvertedStatement = {
+            ...generatedStmt,
+            companyId: generatedStmt.companyId || doc.companyId,
+            sourceDocId: generatedStmt.sourceDocId || doc.id,
+            originalFileName: generatedStmt.originalFileName || doc.fileName,
+            uploadedAt: generatedStmt.uploadedAt || new Date().toISOString(),
+          };
+
+          await updateDocOfxMetadata(enrichedDoc, {
+            ofxStatus: 'done',
+            ofxStatementId: normalizedStmt.id,
+            ofxError: '',
+          });
+
+          setDocJobs((prev) => ({
+            ...prev,
+            [doc.id]: {
+              docId: doc.id,
+              companyId: doc.companyId,
+              fileName: doc.fileName,
+              status: 'done',
+              totalPages: normalizedStmt.totalPages || 1,
+              processedPages: normalizedStmt.pagesProcessed || normalizedStmt.totalPages || 1,
+              foundTransactions: normalizedStmt.transactionsCount || 0,
+              statusLabel: `OFX pronto (${normalizedStmt.transactionsCount} lançamentos)`,
+              statementId: normalizedStmt.id,
+            },
+          }));
+
+          cacheStatementLocally(doc.companyId, normalizedStmt);
+          const { fileBase64: _omitB64, ...compactStmt } = normalizedStmt;
+          setRecentStatements((prev) => [
+            { ...compactStmt, hasOriginalFile: Boolean(base64) },
+            ...prev.filter((s) => s.id !== normalizedStmt.id),
+          ]);
+          setManualJob({
+            status: 'done',
+            companyId: doc.companyId,
+            fileName: doc.fileName,
+            totalPages: normalizedStmt.totalPages || 1,
+            processedPages: normalizedStmt.pagesProcessed || normalizedStmt.totalPages || 1,
+            foundTransactions: normalizedStmt.transactionsCount || 0,
+            statusLabel: `Documento "${doc.fileName}" enviado para o OFX (${normalizedStmt.transactionsCount} lançamentos)`,
+            result: normalizedStmt,
+            updatedAt: new Date().toISOString(),
+          });
+          onStatementCreated?.(normalizedStmt);
+          onStatementsChanged();
+        }
+
+        setDocProcessJobs((prev) => ({
+          ...prev,
+          [doc.id]: {
+            docId: doc.id,
+            companyId: doc.companyId,
+            fileName: doc.fileName,
+            category: enrichedDoc.category,
+            status: 'done',
+            statusLabel: generatedStmt
+              ? `Processado e enviado para o OFX (${generatedStmt.transactionsCount} lanç.)`
+              : 'Dados extraídos e prontos para escrituração',
+            accountingNotes: patch.notes,
+          },
+        }));
+
+        showToast(
+          generatedStmt
+            ? `"${doc.fileName}" processado e enviado para o Conversor OFX (${generatedStmt.transactionsCount} lançamentos)!`
+            : `Documento "${doc.fileName}" processado com IA!`
+        );
       } catch (err: any) {
         const msg = err?.message || 'Erro ao processar documento.';
         setDocProcessJobs((prev) => ({
@@ -1007,7 +1226,7 @@ export const OfxAgentProvider: React.FC<{
     }
 
     processingNonExtratoRef.current = false;
-  }, [showToast, updateDocOfxMetadata]);
+  }, [onStatementCreated, onStatementsChanged, showToast, updateDocOfxMetadata]);
 
   const enqueueNonExtratoProcessing = useCallback(
     (doc: CompanyDocument, preloadedBase64?: string) => {
@@ -1025,7 +1244,7 @@ export const OfxAgentProvider: React.FC<{
           fileName: doc.fileName,
           category: doc.category,
           status: 'queued',
-          statusLabel: 'Na fila de processamento contábil...',
+          statusLabel: 'Na fila de processamento e conversão OFX...',
         },
       }));
 
@@ -1069,9 +1288,9 @@ export const OfxAgentProvider: React.FC<{
         const eligible = candidates.filter((d) => {
           if (d.category === 'extrato') return false;
           if (queuedNonExtratoIdsRef.current.has(d.id)) return false;
-          if (d.status === 'concluido') return false;
+          if (d.status === 'concluido' && d.ofxStatus === 'done') return false;
           const alreadyProcessed = Boolean(d.notes && d.notes.includes('[Processado IA]'));
-          return d.status === 'pendente' || !alreadyProcessed;
+          return d.status === 'pendente' || !alreadyProcessed || d.ofxStatus !== 'done';
         });
 
         eligible.forEach((d) => enqueueNonExtratoProcessing(d));
@@ -1081,6 +1300,280 @@ export const OfxAgentProvider: React.FC<{
       }
     },
     [currentCompany?.id, enqueueNonExtratoProcessing]
+  );
+
+  // Batch consolidation: transform multiple selected documents (e.g., multiple Notas Fiscais) into ONE unified OFX file
+  const convertMultipleDocsToSingleOfx = useCallback(
+    async (
+      docs: CompanyDocument[],
+      resolveBase64Fn?: (doc: CompanyDocument) => Promise<string | null>
+    ): Promise<ConvertedStatement | null> => {
+      if (!docs || docs.length === 0) return null;
+      const targetCompanyId = docs[0].companyId || currentCompany?.id;
+      if (!targetCompanyId) return null;
+
+      setIsConvertingBatchOfx(true);
+      setBatchOfxProgress({
+        current: 0,
+        total: docs.length,
+        label: `Preparando ${docs.length} arquivo(s) para unificação em OFX...`,
+      });
+
+      const allChunks: any[] = [];
+      let totalPagesProcessed = 0;
+
+      try {
+        for (let idx = 0; idx < docs.length; idx++) {
+          const doc = docs[idx];
+          setBatchOfxProgress({
+            current: idx + 1,
+            total: docs.length,
+            label: `Lendo (${idx + 1}/${docs.length}): ${doc.fileName}`,
+          });
+
+          let base64: string | null =
+            doc.fileBase64 || (await getBlobFromIdb(doc.id)) || null;
+          if (!base64 && resolveBase64Fn) {
+            base64 = await resolveBase64Fn(doc);
+          }
+          if (!base64) {
+            try {
+              const r = await fetch(`/api/documents/${doc.id}`, { cache: 'no-store' });
+              if (r.ok) {
+                const full = await r.json();
+                if (full?.fileBase64) {
+                  base64 = cleanBase64(full.fileBase64);
+                  await saveBlobToIdb(doc.id, base64);
+                }
+              }
+            } catch {}
+          }
+
+          const lower = (doc.fileName || '').toLowerCase();
+          const mime = (doc.mimeType || '').toLowerCase();
+          const isTextOrXml =
+            mime.startsWith('text/') ||
+            mime.includes('xml') ||
+            lower.endsWith('.xml') ||
+            lower.endsWith('.ofx') ||
+            lower.endsWith('.csv') ||
+            lower.endsWith('.txt');
+          const isPdf = mime === 'application/pdf' || lower.endsWith('.pdf');
+
+          let docChunks: any[] = [];
+
+          if (base64 && isTextOrXml) {
+            try {
+              const rawText = new TextDecoder('utf-8').decode(
+                base64ToUint8Array(cleanBase64(base64))
+              );
+              const chunkRes = await fetch('/api/ofx/extract-chunk', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  rawText,
+                  mimeType: doc.mimeType || 'application/xml',
+                  bankHint: doc.issuerOrBank || doc.fileName,
+                }),
+              });
+              const chunkJson = await parseSafeJson(chunkRes);
+              if (chunkRes.ok && chunkJson?.extraction?.transactions?.length > 0) {
+                docChunks.push(chunkJson.extraction);
+                totalPagesProcessed += 1;
+              }
+            } catch {}
+          } else if (base64 && isPdf) {
+            try {
+              const bytes = base64ToUint8Array(cleanBase64(base64));
+              const srcPdf = await PDFDocument.load(bytes.buffer as ArrayBuffer, {
+                ignoreEncryption: true,
+              });
+              const numPages = srcPdf.getPageCount();
+              const step = 3;
+              for (let start = 0; start < numPages; start += step) {
+                const end = Math.min(start + step - 1, numPages - 1);
+                const subDoc = await PDFDocument.create();
+                const indices: number[] = [];
+                for (let p = start; p <= end; p++) indices.push(p);
+                const copied = await subDoc.copyPages(srcPdf, indices);
+                copied.forEach((p) => subDoc.addPage(p));
+                const subB64 = uint8ToBase64(await subDoc.save());
+
+                const chunkRes = await fetch('/api/ofx/extract-chunk', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    fileBase64: subB64,
+                    mimeType: 'application/pdf',
+                    bankHint: doc.issuerOrBank || doc.fileName,
+                  }),
+                });
+                const chunkJson = await parseSafeJson(chunkRes);
+                if (chunkRes.ok && chunkJson?.extraction?.transactions?.length > 0) {
+                  docChunks.push(chunkJson.extraction);
+                  totalPagesProcessed += end - start + 1;
+                }
+              }
+            } catch {}
+          } else if (base64) {
+            try {
+              const prepared = await compressImageIfNeeded(
+                cleanBase64(base64),
+                mime || 'image/jpeg'
+              );
+              const chunkRes = await fetch('/api/ofx/extract-chunk', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  fileBase64: prepared.base64,
+                  mimeType: prepared.mimeType,
+                  bankHint: doc.issuerOrBank || doc.fileName,
+                }),
+              });
+              const chunkJson = await parseSafeJson(chunkRes);
+              if (chunkRes.ok && chunkJson?.extraction?.transactions?.length > 0) {
+                docChunks.push(chunkJson.extraction);
+                totalPagesProcessed += 1;
+              }
+            } catch {}
+          }
+
+          // Fallback to /api/documents/process or stored document metadata if binary extraction returned empty
+          if (docChunks.length === 0) {
+            let docForFallback: Partial<CompanyDocument> = doc;
+            if ((!doc.amount || doc.amount <= 0) && base64) {
+              try {
+                let textPreview: string | undefined;
+                let payloadB64: string | undefined = cleanBase64(base64);
+                if (isTextOrXml) {
+                  textPreview = new TextDecoder('utf-8')
+                    .decode(base64ToUint8Array(payloadB64))
+                    .slice(0, 14000);
+                  payloadB64 = undefined;
+                } else if (mime.startsWith('image/')) {
+                  payloadB64 = (await compressImageIfNeeded(payloadB64, mime)).base64;
+                }
+                const procRes = await fetch('/api/documents/process', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    fileName: doc.fileName,
+                    mimeType: doc.mimeType,
+                    currentCategory: doc.category,
+                    companyId: doc.companyId,
+                    base64Data: payloadB64 && payloadB64.length <= 3_300_000 ? payloadB64 : undefined,
+                    textPreview,
+                  }),
+                });
+                const procJson = await parseSafeJson(procRes);
+                if (procRes.ok && procJson) {
+                  docForFallback = {
+                    ...doc,
+                    amount: typeof procJson.amount === 'number' ? procJson.amount : doc.amount,
+                    documentDate: procJson.documentDate || doc.documentDate,
+                    issuerOrBank: procJson.issuerOrBank || doc.issuerOrBank,
+                    documentNumber: procJson.documentNumber || doc.documentNumber,
+                  };
+                }
+              } catch {}
+            }
+
+            const fallbackChunk = buildFallbackExtractionFromDoc(docForFallback, doc.fileName);
+            if (fallbackChunk) {
+              docChunks.push(fallbackChunk);
+              totalPagesProcessed += 1;
+            }
+          }
+
+          allChunks.push(...docChunks);
+        }
+
+        if (allChunks.length === 0) {
+          throw new Error(
+            'Não foram encontrados lançamentos ou valores válidos nos arquivos selecionados para gerar o OFX.'
+          );
+        }
+
+        setBatchOfxProgress({
+          current: docs.length,
+          total: docs.length,
+          label: `Consolidando ${docs.length} arquivos em um único arquivo OFX...`,
+        });
+
+        const unifiedFileName = `OFX_Unificado_${docs.length}_Arquivos_${new Date()
+          .toISOString()
+          .slice(0, 10)}.ofx`;
+
+        const finalizeRes = await fetch('/api/ofx/finalize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chunks: allChunks,
+            totalPages: Math.max(1, totalPagesProcessed),
+            pagesProcessed: Math.max(1, totalPagesProcessed),
+            companyId: targetCompanyId,
+            fileName: unifiedFileName,
+            mimeType: 'application/x-ofx',
+          }),
+        });
+        const finalizeData = await parseSafeJson(finalizeRes);
+        if (!finalizeRes.ok || !finalizeData?.statement) {
+          throw new Error(finalizeData?.error || 'Erro ao consolidar arquivos em OFX único.');
+        }
+
+        const unifiedStmt: ConvertedStatement = {
+          ...finalizeData.statement,
+          companyId: finalizeData.statement.companyId || targetCompanyId,
+          originalFileName: unifiedFileName,
+          uploadedAt: finalizeData.statement.uploadedAt || new Date().toISOString(),
+        };
+
+        try {
+          await saveStatementToFirestore(targetCompanyId, unifiedStmt);
+        } catch {}
+
+        cacheStatementLocally(targetCompanyId, unifiedStmt);
+        const { fileBase64: _omitBatchB64, ...compactBatchStmt } = unifiedStmt;
+        setRecentStatements((prev) => [
+          compactBatchStmt,
+          ...prev.filter((s) => s.id !== unifiedStmt.id),
+        ]);
+        setManualJob({
+          status: 'done',
+          companyId: targetCompanyId,
+          fileName: unifiedFileName,
+          totalPages: unifiedStmt.totalPages || docs.length,
+          processedPages: unifiedStmt.pagesProcessed || docs.length,
+          foundTransactions: unifiedStmt.transactionsCount || 0,
+          statusLabel: `OFX único gerado a partir de ${docs.length} arquivos (${unifiedStmt.transactionsCount} lançamentos)`,
+          result: unifiedStmt,
+          updatedAt: new Date().toISOString(),
+        });
+
+        for (const doc of docs) {
+          await updateDocOfxMetadata(doc, {
+            ofxStatus: 'done',
+            ofxStatementId: unifiedStmt.id,
+            ofxError: '',
+            status: doc.status === 'pendente' ? 'em_analise' : doc.status,
+          });
+        }
+
+        onStatementCreated?.(unifiedStmt);
+        onStatementsChanged();
+        showToast(
+          `${docs.length} arquivos transformados em 1 único OFX (${unifiedStmt.transactionsCount} lançamentos)!`
+        );
+        return unifiedStmt;
+      } catch (err: any) {
+        showToast(err?.message || 'Erro ao consolidar arquivos selecionados em OFX.', 'error');
+        return null;
+      } finally {
+        setIsConvertingBatchOfx(false);
+        setBatchOfxProgress(null);
+      }
+    },
+    [currentCompany?.id, onStatementCreated, onStatementsChanged, showToast, updateDocOfxMetadata]
   );
 
   // Background timer for Hourly & Daily schedules
@@ -1500,6 +1993,8 @@ export const OfxAgentProvider: React.FC<{
         setScheduleMode,
         isSweeping,
         isProcessingOtherDocs,
+        isConvertingBatchOfx,
+        batchOfxProgress,
         activeQueueCount,
         activeDocProcessCount,
         docJobs,
@@ -1511,6 +2006,7 @@ export const OfxAgentProvider: React.FC<{
         skipUnregisteredCompany,
         enqueueDocumentForOfx,
         enqueueNonExtratoProcessing,
+        convertMultipleDocsToSingleOfx,
         runPendingSweep,
         runPendingNonExtratoSweep,
         lastDocumentPatch,

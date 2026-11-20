@@ -409,7 +409,7 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
 
           {/* Search & Filters */}
           <div className="bg-white p-3 rounded-xl border border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
-            <div className="relative flex-1 min-w-[200px]">
+            <div className="relative flex-1 min-w-0 w-full sm:w-auto sm:min-w-[200px]">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
               <input
                 type="text"
@@ -446,7 +446,7 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
           </div>
 
           {/* Table */}
-          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
                 <tr className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200 text-[11px]">
@@ -749,7 +749,7 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
             </button>
           </div>
 
-          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
                 <tr className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200 text-[11px]">
@@ -1054,8 +1054,8 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
       {/* MODAL: BAIXA DO BEM COM APURAÇÃO DE GANHO OU PERDA            */}
       {/* ------------------------------------------------------------- */}
       {showDisposalModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-4 sm:p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[92dvh] overflow-y-auto">
             
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
@@ -1095,7 +1095,7 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
                 </select>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Data da Baixa *</label>
                   <input
