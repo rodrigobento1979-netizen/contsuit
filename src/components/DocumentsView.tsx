@@ -51,6 +51,7 @@ import {
 } from '../types';
 import {
   fetchDocumentsFromFirestore,
+  fetchDocumentBinaryFromFirestore,
   saveDocumentToFirestore,
   deleteDocumentFromFirestore,
   fetchStatementsFromFirestore,
@@ -68,6 +69,12 @@ import { splitAndClassifyPdfFile } from '../utils/pdfSplitter';
 import { PdfCanvasViewer } from './PdfCanvasViewer';
 import { useOfxAgent } from '../context/OfxAgentContext';
 import { isMasterUser, filterCompaniesForUser } from '../utils/auth';
+import {
+  isDocumentDeletedLocal,
+  markDocumentDeletedLocal,
+  mergeDeletedDocumentIdsLocal,
+} from '../utils/documentTombstones';
+import { matchRegisteredCompanyFromMetadata } from '../utils/companyMatcher';
 
 interface DocumentsViewProps {
   currentUser: User;
@@ -366,8 +373,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
   const [savingDetail, setSavingDetail] = useState(false);
   const [reclassifying, setReclassifying] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
+  const [companyDocCounts, setCompanyDocCounts] = useState<Record<string, number>>({});
   const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
   const reattachInputRef = useRef<HTMLInputElement>(null);
+  const firestoreKnownIdsRef = useRef<Set<string>>(new Set());
 
   // Editable detail fields
   const [editDraft, setEditDraft] = useState<{
@@ -384,19 +394,70 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
   const cacheKey = `contsuite_cached_docs_${currentCompany.id}`;
 
+  const refreshCompanyDocCounts = useCallback(async () => {
+    if (visibleCompanies.length === 0) return;
+    const ids = visibleCompanies.map((c) => c.id);
+    let serverCounts: Record<string, number> = {};
+    try {
+      const res = await fetch(
+        `/api/documents/counts?companyIds=${encodeURIComponent(ids.join(','))}`,
+        { cache: 'no-store' }
+      );
+      if (res.ok && (res.headers.get('content-type') || '').includes('application/json')) {
+        const data = await res.json();
+        if (data?.counts && typeof data.counts === 'object') {
+          serverCounts = data.counts;
+        }
+      }
+    } catch {}
+
+    const nextCounts: Record<string, number> = {};
+    ids.forEach((cid) => {
+      let localCount = 0;
+      try {
+        const raw = localStorage.getItem(`contsuite_cached_docs_${cid}`);
+        if (raw) {
+          const parsed: CompanyDocument[] = JSON.parse(raw);
+          localCount = parsed.filter(
+            (d) => d && d.id && !isDocumentDeletedLocal(cid, d.id)
+          ).length;
+        }
+      } catch {}
+      const srv = typeof serverCounts[cid] === 'number' ? serverCounts[cid] : 0;
+      nextCounts[cid] = cid === currentCompany.id ? Math.max(srv, localCount, documents.length) : Math.max(srv, localCount);
+    });
+    setCompanyDocCounts(nextCounts);
+  }, [visibleCompanies, currentCompany.id, documents.length]);
+
+  useEffect(() => {
+    if (viewMode === 'explorer') {
+      void refreshCompanyDocCounts();
+    }
+  }, [viewMode, refreshCompanyDocCounts]);
+
   const mergeDocsIntoState = useCallback(
     (incomingDocs: CompanyDocument[]) => {
       if (!currentCompany.id || incomingDocs.length === 0) return;
       setDocuments((prev) => {
         const map = new Map<string, CompanyDocument>();
         prev.forEach((d) => {
-          if (d && d.id && d.companyId === currentCompany.id) {
+          if (
+            d &&
+            d.id &&
+            d.companyId === currentCompany.id &&
+            !isDocumentDeletedLocal(currentCompany.id, d.id)
+          ) {
             map.set(d.id, d);
           }
         });
-        let changed = false;
+        let changed = map.size !== prev.length;
         incomingDocs.forEach((d) => {
-          if (d && d.id && d.companyId === currentCompany.id) {
+          if (
+            d &&
+            d.id &&
+            d.companyId === currentCompany.id &&
+            !isDocumentDeletedLocal(currentCompany.id, d.id)
+          ) {
             const existing = map.get(d.id);
             const nextDoc: CompanyDocument = {
               ...existing,
@@ -407,7 +468,9 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               !existing ||
               existing.updatedAt !== nextDoc.updatedAt ||
               existing.status !== nextDoc.status ||
-              existing.category !== nextDoc.category
+              existing.category !== nextDoc.category ||
+              existing.ofxStatus !== nextDoc.ofxStatus ||
+              existing.detectedCnpj !== nextDoc.detectedCnpj
             ) {
               changed = true;
             }
@@ -431,10 +494,26 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     if (!currentCompany.id) return;
     if (!silent) setLoading(true);
     let apiDocs: CompanyDocument[] = [];
+    let serverDeletedIds: string[] = [];
+
     try {
-      const res = await fetch(`/api/documents?companyId=${currentCompany.id}`, { cache: 'no-store' });
-      if (res.ok && (res.headers.get('content-type') || '').includes('application/json')) {
-        apiDocs = await res.json();
+      const [docsRes, delRes] = await Promise.all([
+        fetch(`/api/documents?companyId=${currentCompany.id}`, { cache: 'no-store' }),
+        fetch('/api/documents/deleted-ids', { cache: 'no-store' }).catch(() => null),
+      ]);
+      if (docsRes.ok && (docsRes.headers.get('content-type') || '').includes('application/json')) {
+        apiDocs = await docsRes.json();
+      }
+      if (
+        delRes &&
+        delRes.ok &&
+        (delRes.headers.get('content-type') || '').includes('application/json')
+      ) {
+        const delData = await delRes.json();
+        if (Array.isArray(delData?.deletedIds)) {
+          serverDeletedIds = delData.deletedIds;
+          mergeDeletedDocumentIdsLocal(currentCompany.id, serverDeletedIds);
+        }
       }
     } catch (err) {
       if (!silent) console.warn('Could not load documents from API:', err);
@@ -444,6 +523,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     if (!silent) {
       try {
         firestoreDocs = await fetchDocumentsFromFirestore(currentCompany.id);
+        firestoreKnownIdsRef.current = new Set(
+          firestoreDocs
+            .filter((d) => d?.id && !isDocumentDeletedLocal(currentCompany.id, d.id))
+            .map((d) => d.id)
+        );
       } catch (err) {
         console.warn('Could not load documents from Firestore:', err);
       }
@@ -458,6 +542,20 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     }
 
     if (silent) {
+      // Remove any document that now has a server or local tombstone
+      setDocuments((prev) => {
+        const filtered = prev.filter((d) => !isDocumentDeletedLocal(currentCompany.id, d.id));
+        if (filtered.length !== prev.length) {
+          try {
+            localStorage.setItem(
+              cacheKey,
+              JSON.stringify(filtered.map(({ fileBase64, ...rest }) => rest))
+            );
+          } catch {}
+          return filtered;
+        }
+        return prev;
+      });
       if (apiDocs.length > 0) {
         mergeDocsIntoState(apiDocs);
       }
@@ -466,7 +564,12 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
     const map = new Map<string, CompanyDocument>();
     [...localDocs, ...firestoreDocs, ...apiDocs].forEach((d) => {
-      if (d && d.id && d.companyId === currentCompany.id) {
+      if (
+        d &&
+        d.id &&
+        d.companyId === currentCompany.id &&
+        !isDocumentDeletedLocal(currentCompany.id, d.id)
+      ) {
         const existing = map.get(d.id);
         map.set(d.id, {
           ...existing,
@@ -488,6 +591,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
   useEffect(() => {
     setSelectedDocIds([]);
+    firestoreKnownIdsRef.current = new Set();
     void loadDocuments(false);
   }, [loadDocuments, currentCompany.id]);
 
@@ -496,16 +600,60 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     if (!currentCompany.id) return;
 
     const unsubscribe = subscribeDocumentsFromFirestore(currentCompany.id, (liveDocs) => {
-      if (liveDocs.length > 0) {
-        mergeDocsIntoState(liveDocs);
+      const liveNonDeleted = liveDocs.filter(
+        (d) => d?.id && !isDocumentDeletedLocal(currentCompany.id, d.id)
+      );
+      const liveIds = new Set(liveNonDeleted.map((d) => d.id));
+
+      // Detect deletions performed on another device/session in Firestore (works even when liveDocs is empty)
+      const goneIds: string[] = [];
+      firestoreKnownIdsRef.current.forEach((knownId) => {
+        if (!liveIds.has(knownId)) {
+          goneIds.push(knownId);
+        }
+      });
+
+      if (goneIds.length > 0) {
+        goneIds.forEach((goneId) => {
+          markDocumentDeletedLocal(currentCompany.id, goneId);
+          firestoreKnownIdsRef.current.delete(goneId);
+          void deleteBlobFromIdb(goneId);
+          window.dispatchEvent(
+            new CustomEvent('contsuite:document-deleted', {
+              detail: { docId: goneId, companyId: currentCompany.id },
+            })
+          );
+          void fetch(`/api/documents/${goneId}`, { method: 'DELETE' }).catch(() => {});
+        });
+
+        setDocuments((prev) => {
+          const next = prev.filter((d) => !goneIds.includes(d.id));
+          try {
+            localStorage.setItem(
+              cacheKey,
+              JSON.stringify(next.map(({ fileBase64, ...rest }) => rest))
+            );
+          } catch {}
+          return next;
+        });
+      }
+
+      firestoreKnownIdsRef.current = liveIds;
+      if (liveNonDeleted.length > 0) {
+        mergeDocsIntoState(liveNonDeleted);
       }
     });
 
     const handleLocalDocSaved = (e: Event) => {
       const customEv = e as CustomEvent<CompanyDocument>;
-      if (customEv.detail && customEv.detail.companyId === currentCompany.id) {
+      if (
+        customEv.detail &&
+        customEv.detail.companyId === currentCompany.id &&
+        !isDocumentDeletedLocal(currentCompany.id, customEv.detail.id)
+      ) {
         mergeDocsIntoState([customEv.detail]);
       }
+      void refreshCompanyDocCounts();
     };
 
     const handleFocusOrVisibility = () => {
@@ -531,7 +679,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
       document.removeEventListener('visibilitychange', handleFocusOrVisibility);
       window.clearInterval(pollInterval);
     };
-  }, [currentCompany.id, loadDocuments, mergeDocsIntoState]);
+  }, [currentCompany.id, cacheKey, loadDocuments, mergeDocsIntoState, refreshCompanyDocCounts]);
 
   useEffect(() => {
     if (lastInboxSyncEventTs > 0) {
@@ -656,25 +804,51 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     let createdCardsCount = 0;
     let splitFilesCount = 0;
     let triggeredOfxCount = 0;
+    const routedCompanyNames = new Set<string>();
+    const canAutoRoute = visibleCompanies.length > 1;
+    const allowedCompanyIds = visibleCompanies.map((c) => c.id);
 
     const persistCreatedCard = async (
       savedDoc: CompanyDocument,
       binaryBase64: string
     ) => {
+      const targetCompanyId = savedDoc.companyId || currentCompany.id;
       await saveBlobToIdb(savedDoc.id, binaryBase64);
       savedDoc.hasOriginalFile = true;
 
       try {
-        await saveDocumentToFirestore(currentCompany.id, savedDoc);
+        await saveDocumentToFirestore(targetCompanyId, {
+          ...savedDoc,
+          fileBase64: binaryBase64,
+        });
       } catch (fErr) {
         console.warn('Firestore save document warning:', fErr);
       }
 
-      setDocuments((prev) => {
-        const next = [savedDoc, ...prev.filter((d) => d.id !== savedDoc.id)];
-        persistCacheList(next);
-        return next;
-      });
+      if (targetCompanyId === currentCompany.id) {
+        firestoreKnownIdsRef.current.add(savedDoc.id);
+        setDocuments((prev) => {
+          const next = [savedDoc, ...prev.filter((d) => d.id !== savedDoc.id)];
+          persistCacheList(next);
+          return next;
+        });
+      } else {
+        const targetCacheKey = `contsuite_cached_docs_${targetCompanyId}`;
+        try {
+          const raw = localStorage.getItem(targetCacheKey);
+          const existingList: CompanyDocument[] = raw ? JSON.parse(raw) : [];
+          const { fileBase64: _discard, ...metaOnly } = savedDoc;
+          const nextTargetList = [
+            metaOnly,
+            ...existingList.filter((d) => d && d.id !== savedDoc.id && !isDocumentDeletedLocal(targetCompanyId, d.id)),
+          ];
+          localStorage.setItem(targetCacheKey, JSON.stringify(nextTargetList));
+        } catch {}
+        const routedComp = visibleCompanies.find((c) => c.id === targetCompanyId);
+        if (routedComp) {
+          routedCompanyNames.add(`${routedComp.fantasyName || routedComp.name} - ${routedComp.cnpj}`);
+        }
+      }
       createdCardsCount++;
 
       // Automatic OFX Agent trigger for bank statements on upload
@@ -736,11 +910,25 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               const willAutoOfx =
                 autoRunEnabled && scheduleMode === 'on_upload' && grp.category === 'extrato';
 
+              const matchedComp = canAutoRoute
+                ? matchRegisteredCompanyFromMetadata({
+                    companies: visibleCompanies,
+                    detectedCnpj: grp.detectedCnpj,
+                    allDetectedCnpjs: grp.allDetectedCnpjs,
+                    detectedCompanyName: grp.detectedCompanyName,
+                    issuerOrBank: grp.issuerOrBank,
+                    summary: grp.summary,
+                    fileName: grp.fileName,
+                  }).company
+                : undefined;
+              const targetGroupCompanyId = matchedComp?.id || currentCompany.id;
+              const effectiveGroupCnpj = grp.detectedCnpj || matchedComp?.cnpj;
+
               const res = await fetch('/api/documents', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  companyId: currentCompany.id,
+                  companyId: targetGroupCompanyId,
                   fileName: grp.fileName,
                   mimeType: 'application/pdf',
                   fileSize: grp.fileSize,
@@ -751,7 +939,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                   issuerOrBank: grp.issuerOrBank,
                   documentNumber: grp.documentNumber,
                   amount: grp.amount,
-                  detectedCnpj: grp.detectedCnpj,
+                  detectedCnpj: effectiveGroupCnpj,
                   summary: grp.summary,
                   aiClassified: grp.aiClassified,
                   confidence: grp.aiClassified ? 94 : 80,
@@ -769,7 +957,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                 const now = new Date().toISOString();
                 savedDoc = {
                   id: 'doc-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 10000),
-                  companyId: currentCompany.id,
+                  companyId: targetGroupCompanyId,
                   fileName: grp.fileName.slice(0, 200),
                   mimeType: 'application/pdf',
                   fileSize: grp.fileSize,
@@ -780,7 +968,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                   issuerOrBank: grp.issuerOrBank,
                   documentNumber: grp.documentNumber,
                   amount: grp.amount,
-                  detectedCnpj: grp.detectedCnpj,
+                  detectedCnpj: effectiveGroupCnpj,
                   summary: grp.summary,
                   aiClassified: grp.aiClassified,
                   sourceGroupLabel: grp.groupLabel,
@@ -817,6 +1005,8 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             textPreview,
             uploadedBy: currentUser.email,
             autoClassify: true,
+            autoRouteByCompany: canAutoRoute,
+            allowedCompanyIds,
           }),
         });
 
@@ -853,6 +1043,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
 
     setUploadingQueue(null);
     if (createdCardsCount > 0) {
+      void refreshCompanyDocCounts();
       const splitSuffix =
         splitFilesCount > 0
           ? ` (${createdCardsCount} cards criados com separação automática de extratos e recibos)`
@@ -861,7 +1052,11 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
         triggeredOfxCount > 0
           ? ` • Agente OFX iniciado automaticamente para ${triggeredOfxCount} extrato(s).`
           : '';
-      showToast(`Importação concluída!${splitSuffix}${ofxSuffix}`);
+      const routeSuffix =
+        routedCompanyNames.size > 0
+          ? ` • Arquivado automaticamente na pasta: ${Array.from(routedCompanyNames).join(', ')}`
+          : '';
+      showToast(`Importação concluída!${splitSuffix}${routeSuffix}${ofxSuffix}`);
     }
   };
 
@@ -909,7 +1104,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     }
 
     try {
-      await saveDocumentToFirestore(currentCompany.id, optimistic);
+      await saveDocumentToFirestore(existing.companyId || currentCompany.id, optimistic);
     } catch (fErr) {
       console.warn('Firestore update document warning:', fErr);
     }
@@ -919,31 +1114,77 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     }
   };
 
-  // Delete document
+  // Delete document permanently across local tombstones, IndexedDB, API/db.json, and Firestore (doc + chunks)
   const handleDeleteDocument = async (docId: string) => {
+    const targetDoc =
+      documents.find((d) => d.id === docId) ||
+      (selectedDoc?.id === docId ? selectedDoc : null);
+    const targetCompanyId = targetDoc?.companyId || currentCompany.id;
+
+    setDeletingDocId(docId);
+    markDocumentDeletedLocal(targetCompanyId, docId);
+    if (targetCompanyId !== currentCompany.id) {
+      markDocumentDeletedLocal(currentCompany.id, docId);
+    }
+    firestoreKnownIdsRef.current.delete(docId);
+
     setDocuments((prev) => {
       const next = prev.filter((d) => d.id !== docId);
       persistCacheList(next);
       return next;
     });
+    setSelectedDocIds((prev) => prev.filter((id) => id !== docId));
     if (selectedDoc?.id === docId) {
       closeDetailModal();
     }
     setConfirmDeleteId(null);
 
-    await deleteBlobFromIdb(docId);
+    window.dispatchEvent(
+      new CustomEvent('contsuite:document-deleted', {
+        detail: { docId, companyId: targetCompanyId },
+      })
+    );
+
+    let apiOk = false;
+    let firestoreOk = false;
 
     try {
-      await fetch(`/api/documents/${docId}`, { method: 'DELETE' });
-    } catch {}
+      await deleteBlobFromIdb(docId);
 
-    try {
-      await deleteDocumentFromFirestore(currentCompany.id, docId);
-    } catch (fErr) {
-      console.warn('Firestore delete document warning:', fErr);
+      try {
+        const res = await fetch(`/api/documents/${docId}`, { method: 'DELETE' });
+        apiOk = res.ok;
+      } catch (apiErr) {
+        console.warn('API delete document error:', apiErr);
+      }
+
+      try {
+        firestoreOk = await deleteDocumentFromFirestore(targetCompanyId, docId);
+        if (targetCompanyId !== currentCompany.id) {
+          await deleteDocumentFromFirestore(currentCompany.id, docId);
+        }
+      } catch (fErr) {
+        console.warn('Firestore delete document error:', fErr);
+      }
+
+      void refreshCompanyDocCounts();
+
+      if (apiOk && firestoreOk) {
+        showToast('Arquivo excluído permanentemente do sistema e banco de dados.');
+      } else if (apiOk || firestoreOk) {
+        showToast(
+          'Arquivo removido localmente e no servidor, mas a exclusão na nuvem (Firestore) exige sessão autenticada.',
+          'error'
+        );
+      } else {
+        showToast(
+          'Falha ao confirmar exclusão no banco de dados. Tente novamente.',
+          'error'
+        );
+      }
+    } finally {
+      setDeletingDocId(null);
     }
-
-    showToast('Arquivo removido com sucesso.');
   };
 
   const isPdfDoc = (docItem: CompanyDocument) =>
@@ -962,7 +1203,7 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
     return 'image/jpeg';
   };
 
-  // Fetch file binary (In-memory -> IndexedDB -> API)
+  // Fetch file binary (In-memory -> IndexedDB -> API -> Firestore chunks)
   const resolveFileBase64 = async (docItem: CompanyDocument): Promise<string | null> => {
     if (docItem.fileBase64) return cleanBase64(docItem.fileBase64);
     const localB64 = await getBlobFromIdb(docItem.id);
@@ -977,6 +1218,18 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
           await saveBlobToIdb(docItem.id, cleaned);
           return cleaned;
         }
+      }
+    } catch {}
+
+    try {
+      const fsB64 = await fetchDocumentBinaryFromFirestore(
+        docItem.companyId || currentCompany.id,
+        docItem.id
+      );
+      if (fsB64) {
+        const cleaned = cleanBase64(fsB64);
+        await saveBlobToIdb(docItem.id, cleaned);
+        return cleaned;
       }
     } catch {}
     return null;
@@ -1465,6 +1718,12 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                   <span className="truncate max-w-[130px]">{docItem.issuerOrBank}</span>
                 </>
               )}
+              {docItem.detectedCnpj && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-mono text-[10px] text-slate-600">{docItem.detectedCnpj}</span>
+                </>
+              )}
               <span aria-hidden="true">·</span>
               <span className="tabular-nums">{formatFileSize(docItem.fileSize)}</span>
             </div>
@@ -1669,21 +1928,24 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
             <div className="flex items-center gap-1 shrink-0">
               <button
                 type="button"
+                disabled={deletingDocId === docItem.id}
                 onClick={(e) => {
                   e.stopPropagation();
                   void handleDeleteDocument(docItem.id);
                 }}
-                className="px-2 py-0.5 rounded bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold cursor-pointer"
+                className="px-2 py-0.5 rounded bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold cursor-pointer disabled:opacity-60 inline-flex items-center gap-1"
               >
-                Excluir
+                {deletingDocId === docItem.id && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
+                <span>Excluir</span>
               </button>
               <button
                 type="button"
+                disabled={deletingDocId === docItem.id}
                 onClick={(e) => {
                   e.stopPropagation();
                   setConfirmDeleteId(null);
                 }}
-                className="px-2 py-0.5 rounded bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-[10px] font-medium cursor-pointer"
+                className="px-2 py-0.5 rounded bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-[10px] font-medium cursor-pointer disabled:opacity-60"
               >
                 Cancelar
               </button>
@@ -2256,7 +2518,12 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
                 {visibleCompanies.map((comp) => {
-                  const folderLabel = `${comp.fantasyName || comp.name} - ${comp.cnpj}`;
+                  const docCount =
+                    typeof companyDocCounts[comp.id] === 'number'
+                      ? companyDocCounts[comp.id]
+                      : comp.id === currentCompany.id
+                        ? documents.length
+                        : 0;
                   return (
                     <div
                       key={comp.id}
@@ -2271,9 +2538,14 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                         <FolderOpen className="w-6 h-6" />
                       </div>
                       <div className="min-w-0 flex-1 space-y-1">
-                        <span className="text-[10px] font-bold text-teal-700 uppercase tracking-wider block">
-                          Pasta do Cliente
-                        </span>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] font-bold text-teal-700 uppercase tracking-wider truncate">
+                            Pasta do Cliente
+                          </span>
+                          <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 shrink-0">
+                            {docCount} {docCount === 1 ? 'arquivo' : 'arquivos'}
+                          </span>
+                        </div>
                         <h4 className="font-extrabold text-slate-900 text-sm truncate group-hover:text-teal-800 transition">
                           {comp.fantasyName || comp.name}
                         </h4>
@@ -2762,15 +3034,18 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                               <span className="inline-flex items-center gap-1 ml-1">
                                 <button
                                   type="button"
+                                  disabled={deletingDocId === docItem.id}
                                   onClick={() => void handleDeleteDocument(docItem.id)}
-                                  className="px-2 py-0.5 rounded bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold cursor-pointer"
+                                  className="px-2 py-0.5 rounded bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold cursor-pointer disabled:opacity-60 inline-flex items-center gap-1"
                                 >
-                                  Confirmar
+                                  {deletingDocId === docItem.id && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
+                                  <span>Confirmar</span>
                                 </button>
                                 <button
                                   type="button"
+                                  disabled={deletingDocId === docItem.id}
                                   onClick={() => setConfirmDeleteId(null)}
-                                  className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px] font-medium cursor-pointer"
+                                  className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px] font-medium cursor-pointer disabled:opacity-60"
                                 >
                                   Cancelar
                                 </button>
@@ -3308,15 +3583,18 @@ export const DocumentsView: React.FC<DocumentsViewProps> = ({
                       <span className="text-xs font-semibold text-rose-700">Excluir?</span>
                       <button
                         type="button"
+                        disabled={deletingDocId === selectedDoc.id}
                         onClick={() => void handleDeleteDocument(selectedDoc.id)}
-                        className="px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold cursor-pointer"
+                        className="px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold cursor-pointer disabled:opacity-60 inline-flex items-center gap-1"
                       >
-                        Confirmar
+                        {deletingDocId === selectedDoc.id && <Loader2 className="w-3 h-3 animate-spin" />}
+                        <span>Confirmar</span>
                       </button>
                       <button
                         type="button"
+                        disabled={deletingDocId === selectedDoc.id}
                         onClick={() => setConfirmDeleteId(null)}
-                        className="px-2.5 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-medium cursor-pointer"
+                        className="px-2.5 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-medium cursor-pointer disabled:opacity-60"
                       >
                         Cancelar
                       </button>

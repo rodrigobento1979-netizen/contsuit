@@ -12,6 +12,8 @@ export interface PageClassificationItem {
   documentNumber?: string;
   amount?: number;
   detectedCnpj?: string;
+  allDetectedCnpjs?: string[];
+  detectedCompanyName?: string;
   summary: string;
   aiClassified: boolean;
 }
@@ -31,6 +33,8 @@ export interface SplitPdfGroup {
   documentNumber?: string;
   amount?: number;
   detectedCnpj?: string;
+  allDetectedCnpjs?: string[];
+  detectedCompanyName?: string;
   summary: string;
   aiClassified: boolean;
 }
@@ -191,6 +195,15 @@ export async function splitAndClassifyPdfFile(
           documentNumber: first?.documentNumber,
           amount: totalAmt > 0 ? Number(totalAmt.toFixed(2)) : undefined,
           detectedCnpj: allPages.find((x) => x.detectedCnpj)?.detectedCnpj,
+          allDetectedCnpjs: Array.from(
+            new Set(
+              allPages
+                .flatMap((x) => [x.detectedCnpj, ...(x.allDetectedCnpjs || [])])
+                .filter((x): x is string => Boolean(x))
+            )
+          ),
+          detectedCompanyName:
+            allPages.find((x) => x.detectedCompanyName)?.detectedCompanyName || issuers[0],
           summary:
             first?.summary ||
             `${CATEGORY_GROUP_LABEL[onlyCategory]} (${totalPages} páginas).`,
@@ -253,6 +266,15 @@ export async function splitAndClassifyPdfFile(
       documentNumber: firstItem?.documentNumber,
       amount: totalAmt > 0 ? Number(totalAmt.toFixed(2)) : undefined,
       detectedCnpj: items.find((x) => x.detectedCnpj)?.detectedCnpj,
+      allDetectedCnpjs: Array.from(
+        new Set(
+          items
+            .flatMap((x) => [x.detectedCnpj, ...(x.allDetectedCnpjs || [])])
+            .filter((x): x is string => Boolean(x))
+        )
+      ),
+      detectedCompanyName:
+        items.find((x) => x.detectedCompanyName)?.detectedCompanyName || issuers[0],
       summary: `${CATEGORY_GROUP_LABEL[cat]} extraído de "${file.name}" (${pagesLabel}). ${
         firstItem?.summary || ''
       }`.slice(0, 240),

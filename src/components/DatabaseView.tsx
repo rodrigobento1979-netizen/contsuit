@@ -515,7 +515,7 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
                   rows={6}
                   value={restoreJsonText}
                   onChange={(e) => setRestoreJsonText(e.target.value)}
-                  placeholder='{"version": "1.1", "data": { "companies": [...], "assets": [...] }}'
+                  placeholder='{"version": "1.2", "data": { "companies": [...], "assets": [...] }}'
                   className="w-full p-2.5 rounded-xl border border-slate-300 font-mono text-[11px] focus:outline-none focus:ring-2 focus:ring-teal-500"
                 />
               </div>

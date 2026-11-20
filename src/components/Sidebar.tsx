@@ -385,19 +385,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
             type="button"
             onClick={onOpenHelpModal}
             className="w-full text-left px-3 py-2.5 rounded-xl bg-sky-300 hover:bg-sky-200 border border-sky-200 text-slate-900 transition cursor-pointer flex items-center justify-between text-xs shadow-sm"
-            title="Abrir Central de Ajuda, Novidades e Manual do ContSuite v1.1"
+            title="Abrir Central de Ajuda, Novidades e Manual do ContSuite v1.2"
           >
             <div className="flex items-center gap-2.5 min-w-0">
               <HelpCircle className="w-4 h-4 text-sky-800 shrink-0" />
               <div className="truncate">
                 <span className="block truncate font-extrabold text-slate-900">Ajuda & Novidades</span>
                 <span className="text-[10px] text-sky-900 font-semibold block truncate">
-                  Funções do Sistema · v1.1
+                  Funções do Sistema · v1.2
                 </span>
               </div>
             </div>
             <span className="px-1.5 py-0.5 rounded bg-sky-700 text-white font-black text-[9px] shrink-0">
-              v1.1
+              v1.2
             </span>
           </button>
         </div>
@@ -423,7 +423,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </p>
             </div>
           </div>
-          <span className="text-[10px] font-mono text-teal-300/80 shrink-0">v1.1</span>
+          <span className="text-[10px] font-mono text-teal-300/80 shrink-0">v1.2</span>
         </button>
 
         <button

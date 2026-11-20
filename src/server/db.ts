@@ -195,6 +195,7 @@ export interface SystemData {
   payments: FeePaymentRecord[];
   accounts: ChartAccount[];
   documents: CompanyDocument[];
+  deletedDocumentIds?: string[];
 }
 
 const isVercel = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
@@ -236,6 +237,7 @@ const INITIAL_DATA: SystemData = {
   fees: [],
   payments: [],
   documents: [],
+  deletedDocumentIds: [],
   accounts: [
     { id: 'acc-1', companyId: 'comp-master', code: '1.1.1.02.0001', name: 'Banco Itaú Unibanco S/A c/c', type: 'analitica', nature: 'devedora', group: 'ativo', categoryTag: 'banco', level: 5, createdAt: '2026-01-01T08:00:00.000Z' },
     { id: 'acc-2', companyId: 'comp-master', code: '1.1.1.02.0002', name: 'Banco Bradesco S/A c/c', type: 'analitica', nature: 'devedora', group: 'ativo', categoryTag: 'banco', level: 5, createdAt: '2026-01-01T08:00:00.000Z' },
@@ -293,6 +295,7 @@ export function loadDb(): SystemData {
         payments: parsed.payments || INITIAL_DATA.payments,
         accounts: parsed.accounts || INITIAL_DATA.accounts,
         documents: parsed.documents || INITIAL_DATA.documents,
+        deletedDocumentIds: Array.isArray(parsed.deletedDocumentIds) ? parsed.deletedDocumentIds : [],
       };
       return memoryDb;
     }
@@ -909,7 +912,7 @@ export function getDatabaseStats() {
 export function exportBackup() {
   const db = loadDb();
   return {
-    version: '1.1',
+    version: '1.2',
     system: 'ContSuite Contábil',
     exportedAt: new Date().toISOString(),
     adminEmail: 'rodrigobento1979@gmail.com',
@@ -937,6 +940,7 @@ export function restoreBackup(payload: any) {
     payments: dataToRestore.payments || [],
     accounts: dataToRestore.accounts || [],
     documents: dataToRestore.documents || [],
+    deletedDocumentIds: Array.isArray(dataToRestore.deletedDocumentIds) ? dataToRestore.deletedDocumentIds : [],
   };
 
   saveDb(restored);
@@ -1002,6 +1006,7 @@ export function clearDemoData(adminEmail: string = 'rodrigobento1979@gmail.com')
     payments: [],
     accounts: db.accounts && db.accounts.length > 0 ? db.accounts : INITIAL_DATA.accounts,
     documents: [],
+    deletedDocumentIds: [],
   };
 
   saveDb(cleaned);
@@ -1023,9 +1028,15 @@ export function clearDemoData(adminEmail: string = 'rodrigobento1979@gmail.com')
 // ---------------------------------------------------------
 // ARQUIVOS & DOCUMENTOS CONTÁBEIS (COMPANY DOCUMENTS)
 // ---------------------------------------------------------
+export function getDeletedDocumentIds(): string[] {
+  const db = loadDb();
+  return Array.isArray(db.deletedDocumentIds) ? db.deletedDocumentIds : [];
+}
+
 export function getDocuments(companyId?: string) {
   const db = loadDb();
-  const docs = db.documents || [];
+  const delSet = new Set(db.deletedDocumentIds || []);
+  const docs = (db.documents || []).filter(d => d && !delSet.has(d.id));
   if (companyId && companyId !== 'all') {
     return docs.filter(d => d.companyId === companyId);
   }
@@ -1034,6 +1045,7 @@ export function getDocuments(companyId?: string) {
 
 export function getDocumentById(id: string) {
   const db = loadDb();
+  if ((db.deletedDocumentIds || []).includes(id)) return undefined;
   return (db.documents || []).find(d => d.id === id);
 }
 
@@ -1088,6 +1100,7 @@ export function updateDocument(id: string, updates: Partial<CompanyDocument>) {
 
 export function upsertDocument(doc: Partial<CompanyDocument> & { id: string; companyId: string }) {
   const db = loadDb();
+  if ((db.deletedDocumentIds || []).includes(doc.id)) return null;
   if (!db.documents) db.documents = [];
   const now = new Date().toISOString();
   const idx = db.documents.findIndex(d => d.id === doc.id);
@@ -1144,14 +1157,22 @@ export function upsertDocument(doc: Partial<CompanyDocument> & { id: string; com
 
 export function deleteDocument(id: string) {
   const db = loadDb();
-  if (!db.documents) return false;
+  if (!db.documents) db.documents = [];
+  if (!db.deletedDocumentIds) db.deletedDocumentIds = [];
+
   const initialLen = db.documents.length;
   db.documents = db.documents.filter(d => d.id !== id);
-  if (db.documents.length !== initialLen) {
-    saveDb(db);
-    return true;
+  const removedFromDocs = db.documents.length !== initialLen;
+
+  const alreadyTombstoned = db.deletedDocumentIds.includes(id);
+  if (id && !alreadyTombstoned) {
+    db.deletedDocumentIds = [id, ...db.deletedDocumentIds].slice(0, 1000);
   }
-  return false;
+
+  if (removedFromDocs || !alreadyTombstoned) {
+    saveDb(db);
+  }
+  return removedFromDocs;
 }
 
 

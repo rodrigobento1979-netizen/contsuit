@@ -222,13 +222,28 @@ export async function syncUserToFirestore(user: User): Promise<void> {
   try {
     await setDoc(doc(db, 'users', user.id), stripUndefinedDeep(user), { merge: true });
 
-    // Apenas o Administrador Master é registrado em /admins para validação de regras globais
     const normEmail = (user.email || '').toLowerCase().trim();
+    const authEmail = (auth.currentUser.email || '').toLowerCase().trim();
+    if (auth.currentUser.uid && auth.currentUser.uid !== user.id && (!authEmail || authEmail === normEmail)) {
+      await setDoc(
+        doc(db, 'users', auth.currentUser.uid),
+        stripUndefinedDeep({ ...user, id: auth.currentUser.uid }),
+        { merge: true }
+      ).catch(() => {});
+    }
+
+    // Apenas o Administrador Master é registrado em /admins para validação de regras globais
     if (normEmail === 'rodrigobento1979@gmail.com' || normEmail === 'contsuitesistemas@gmail.com') {
       await setDoc(doc(db, 'admins', user.id), {
         email: user.email,
         createdAt: new Date().toISOString(),
       }, { merge: true });
+      if (auth.currentUser.uid && auth.currentUser.uid !== user.id) {
+        await setDoc(doc(db, 'admins', auth.currentUser.uid), {
+          email: user.email,
+          createdAt: new Date().toISOString(),
+        }, { merge: true }).catch(() => {});
+      }
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
@@ -412,13 +427,36 @@ export async function saveDocumentToFirestore(companyId: string, documentData: C
   }
 }
 
-export async function deleteDocumentFromFirestore(companyId: string, documentId: string): Promise<void> {
-  if (!auth.currentUser || !companyId || !documentId) return;
+export async function deleteDocumentFromFirestore(
+  companyId: string,
+  documentId: string
+): Promise<boolean> {
+  if (!auth.currentUser || !companyId || !documentId) return false;
   const path = `companies/${companyId}/documents/${documentId}`;
   try {
+    // 1. Delete all binary chunks inside the subcollection first so no orphan storage remains
+    try {
+      const chunksSnap = await getDocs(
+        collection(db, 'companies', companyId, 'documents', documentId, 'chunks')
+      );
+      if (!chunksSnap.empty) {
+        await Promise.all(chunksSnap.docs.map((chunkDoc) => deleteDoc(chunkDoc.ref)));
+      }
+    } catch (chunkErr: any) {
+      if (chunkErr?.code !== 'not-found') {
+        console.warn('Firestore delete chunks warning:', chunkErr);
+      }
+    }
+
+    // 2. Delete the document metadata itself
     await deleteDoc(doc(db, 'companies', companyId, 'documents', documentId));
-  } catch (error) {
+    return true;
+  } catch (error: any) {
+    if (error?.code === 'not-found') {
+      return true;
+    }
     handleFirestoreError(error, OperationType.DELETE, path);
+    return false;
   }
 }
 

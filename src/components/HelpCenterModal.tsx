@@ -22,7 +22,7 @@ import {
   ShieldCheck,
   Camera,
   CheckCircle,
-  Smartphone,
+  Trash2,
 } from 'lucide-react';
 import { AppNavTab } from './Sidebar';
 
@@ -125,14 +125,14 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
       id: 'documents',
       tab: 'documents',
       icon: FolderOpen,
-      title: 'Arquivos, Câmera & Kanban Contábil IA',
+      title: 'Arquivos, Explorador CNPJ, Câmera & OFX',
       group: 'Ferramentas',
-      summary: 'Digitalização móvel em PDF comprimido, triagem automática e OFX em lote.',
+      summary: 'Arquivamento automático por Empresa/CNPJ, PDF comprimido, exclusão definitiva e OFX em lote.',
       bullets: [
-        'Digitalização por Câmera ou Upload de fotos: toda foto enviada é convertida automaticamente para PDF ultracomprimido com sincronização imediata.',
-        'Botão Processar / Reprocessar em Notas Fiscais (XML, PDF ou imagem) envia o lançamento automaticamente para o Conversor OFX.',
-        'Seletor circular (radio) nos cards e na lista para selecionar vários arquivos e gerar 1 único arquivo OFX unificado.',
-        'Separação automática de PDFs mistos, visualização ampliada (botão laranja), Baixar OFX, Arquivar e Excluir.',
+        'Identificação automática de Empresa e CNPJ (incluindo XMLs NF-e) para arquivamento direto nas pastas do Explorador ([Nome] - [CNPJ]) com contador em tempo real.',
+        'Exclusão definitiva e sincronizada entre navegador, servidor e nuvem Firestore (incluindo remoção de fragmentos binários).',
+        'Digitalização por Câmera ou Upload de fotos convertida automaticamente para PDF ultracomprimido com pré-visualização entre dispositivos.',
+        'Processar / Reprocessar Notas Fiscais envia para o Conversor OFX e o seletor circular (radio) consolida vários arquivos em 1 único OFX.',
       ],
     },
     {
@@ -175,40 +175,40 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
 
   const novidades = [
     {
+      icon: FolderTree,
+      badge: 'Novo na v1.2',
+      title: 'Arquivamento Automático por Empresa & CNPJ no Explorador',
+      desc: 'Ao importar, digitalizar ou receber arquivos (inclusive XMLs de NF-e com tag <CNPJ>), o sistema identifica automaticamente CNPJ e Razão Social/Fantasia e arquiva na pasta [Nome] - [CNPJ] correspondente, com contador de arquivos por pasta e selo de CNPJ nos cards.',
+    },
+    {
+      icon: Trash2,
+      badge: 'Novo na v1.2',
+      title: 'Exclusão Definitiva no Banco, Nuvem & Cache Local',
+      desc: 'A exclusão de documentos agora remove metadados e todos os fragmentos binários (chunks) no Firestore, servidor e IndexedDB, com registro de remoção (tombstones) entre dispositivos para que arquivos apagados nunca retornem após recarregar ou sincronizar.',
+    },
+    {
+      icon: Eye,
+      badge: 'Melhoria v1.2',
+      title: 'Pré-visualização Cross-Device & Sincronização de Sessão',
+      desc: 'Arquivos enviados pelo computador ou câmera do celular sincronizam fragmentos binários para abertura em qualquer dispositivo, com validação de acesso por UID Firebase e controle rigoroso das empresas permitidas.',
+    },
+    {
       icon: Camera,
-      badge: 'Novo na v1.1',
+      badge: 'Melhoria v1.2',
       title: 'Câmera Mobile & PDF Ultracomprimido Automático',
-      desc: 'Toda foto tirada pela câmera ou enviada via upload é redimensionada, contrastada e convertida automaticamente em PDF ultracomprimido (~85 KB/pág.) com sincronização instantânea e botões protegidos das barras do celular.',
+      desc: 'Toda foto tirada pela câmera ou enviada via upload é redimensionada, contrastada e convertida em PDF ultracomprimido (~85 KB/pág.) com sincronização instantânea e botões protegidos das barras do celular.',
     },
     {
       icon: Sparkles,
-      badge: 'Novo na v1.1',
-      title: 'Processar / Reprocessar Notas Fiscais → OFX',
-      desc: 'Ao clicar em Processar ou Reprocessar em Notas Fiscais (XML NF-e/NFS-e/CT-e, PDF ou foto) dentro de Arquivos, o documento é convertido e enviado automaticamente ao Conversor OFX.',
-    },
-    {
-      icon: CheckCircle,
-      badge: 'Novo na v1.1',
-      title: 'Seleção Múltipla (Radio) para OFX Único em Lote',
-      desc: 'Marque múltiplas notas fiscais ou documentos usando o seletor circular (radio) nos cards ou na lista de Arquivos e clique em "Transformar em Único OFX" para consolidar tudo em um só arquivo.',
-    },
-    {
-      icon: ShieldCheck,
-      badge: 'Novo na v1.1',
-      title: 'Isolamento Estrito por Conta & Experiência Mobile',
-      desc: 'Cada conta enxerga estritamente as empresas e dados cadastrados nela, mantendo a sessão salva ao recarregar. Todas as telas, tabelas e modais foram ajustados para visibilidade completa no celular.',
+      badge: 'OFX & Lote',
+      title: 'Notas Fiscais → OFX & Seletor Múltiplo (Radio)',
+      desc: 'Processe ou reprocesse Notas Fiscais (XML, PDF ou foto) direto para o Conversor OFX ou selecione vários arquivos pelo seletor circular (radio) para gerar 1 único arquivo OFX consolidado.',
     },
     {
       icon: Inbox,
       badge: 'Automação',
-      title: 'Recebimento Automático de Extratos via E-mail',
-      desc: 'Anexos enviados para contsuitesistemas@gmail.com são importados automaticamente para Arquivos (vinculados por e-mail/CNPJ) com separação IA de PDFs mistos e geração de OFX.',
-    },
-    {
-      icon: Smartphone,
-      badge: 'Layout Mobile',
-      title: 'Navegação & Modais em Tela Cheia Segura',
-      desc: 'Suporte a safe-area em celulares iOS/Android, cabeçalho compacto, pré-visualização de PDF antes de enviar a foto e zero corte de botões na câmera.',
+      title: 'Recebimento Automático por E-mail com Roteamento CNPJ',
+      desc: 'Anexos enviados para contsuitesistemas@gmail.com são importados automaticamente para a pasta da empresa correta (por e-mail, CNPJ ou nome) com separação IA de PDFs mistos e geração de OFX.',
     },
   ];
 
@@ -233,11 +233,11 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
                   Central de Ajuda & Manual do Sistema
                 </h2>
                 <span className="px-2 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[10px] font-black tracking-wide uppercase">
-                  Versão 1.1
+                  Versão 1.2
                 </span>
               </div>
               <p className="text-[11px] sm:text-xs text-teal-100 truncate">
-                Guia completo das funcionalidades, novidades da versão 1.1 e recebimento por e-mail
+                Guia completo das funcionalidades, novidades da versão 1.2 e recebimento por e-mail
               </p>
             </div>
           </div>
@@ -264,7 +264,7 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
             }`}
           >
             <Sparkles className="w-3.5 h-3.5" />
-            <span>Novidades (v1.1)</span>
+            <span>Novidades (v1.2)</span>
           </button>
 
           <button
@@ -302,10 +302,10 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
                 <div>
                   <h3 className="text-xs sm:text-sm font-bold text-teal-950 flex items-center gap-1.5">
                     <ShieldCheck className="w-4 h-4 text-teal-700 shrink-0" />
-                    ContSuite Contábil — Release Oficial v1.1
+                    ContSuite Contábil — Release Oficial v1.2
                   </h3>
                   <p className="text-xs text-teal-800 mt-0.5">
-                    Isolamento estrito por conta, fotos convertidas para PDF ultracomprimido, Notas Fiscais → OFX único em lote e responsividade mobile completa.
+                    Identificação automática de Empresa/CNPJ com arquivamento no Explorador de Pastas, exclusão definitiva sincronizada na nuvem e pré-visualização entre dispositivos.
                   </p>
                 </div>
                 <button
@@ -452,7 +452,7 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
                   Como funciona o Recebimento Automático (contsuitesistemas@gmail.com)
                 </h3>
                 <p className="leading-relaxed text-teal-900">
-                  O ContSuite v1.1 monitora a caixa de entrada de{' '}
+                  O ContSuite v1.2 monitora a caixa de entrada de{' '}
                   <strong>contsuitesistemas@gmail.com</strong> via protocolo seguro IMAP (SSL porta 993).
                   Assim que o cliente envia um e-mail com extrato bancário, nota fiscal ou recibo em anexo:
                 </p>
@@ -528,7 +528,7 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
         {/* Footer */}
         <div className="px-4 sm:px-5 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3 shrink-0">
           <span className="text-[11px] text-slate-500 font-medium">
-            ContSuite Contábil · Versão 1.1
+            ContSuite Contábil · Versão 1.2
           </span>
           <button
             type="button"

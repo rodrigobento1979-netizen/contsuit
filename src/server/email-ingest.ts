@@ -15,6 +15,7 @@ import {
 import {
   analyzePdfPagesWithAI,
   classifyDocumentWithAI,
+  matchRegisteredCompanyServer,
   PageClassificationItem,
 } from './document-ai.ts';
 import {
@@ -92,6 +93,11 @@ function resolveCompanyForEmail(params: {
   bodyText: string;
   fileName: string;
   detectedCnpj?: string;
+  allDetectedCnpjs?: string[];
+  detectedCompanyName?: string;
+  issuerOrBank?: string;
+  summary?: string;
+  textPreview?: string;
 }): Company | undefined {
   const companies = getCompanies();
   if (!companies.length) return undefined;
@@ -101,25 +107,18 @@ function resolveCompanyForEmail(params: {
   const clientCompanies = companies.filter((c) => c.id !== 'comp-master');
   const masterCompany = companies.find((c) => c.id === 'comp-master');
 
-  // 1. Match by CNPJ found in document AI or email text/subject/filename (client companies first)
-  const combinedText = `${params.detectedCnpj || ''}\n${params.subject}\n${params.bodyText}\n${params.fileName}`;
-  const cnpjMatches = combinedText.match(/\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}/g) || [];
-  for (const rawCnpj of cnpjMatches) {
-    const digits = rawCnpj.replace(/\D/g, '');
-    if (digits.length === 14) {
-      const clientMatch = clientCompanies.find((c) => c.cnpj.replace(/\D/g, '') === digits);
-      if (clientMatch) return clientMatch;
-    }
-  }
-
-  // 2. Match by client company fantasyName or name inside subject/body/filename
-  const haystack = `${params.subject} ${params.bodyText.slice(0, 1500)} ${params.fileName}`.toLowerCase();
-  for (const comp of clientCompanies) {
-    const fantasy = (comp.fantasyName || '').toLowerCase().trim();
-    const legal = (comp.name || '').toLowerCase().trim();
-    if (fantasy.length >= 3 && haystack.includes(fantasy)) return comp;
-    if (legal.length >= 5 && haystack.includes(legal)) return comp;
-  }
+  // 1 & 2. Match by CNPJ or Company Name across document AI, XML/PDF text, subject, body, filename
+  const docMatch = matchRegisteredCompanyServer({
+    companies,
+    detectedCnpj: params.detectedCnpj,
+    allDetectedCnpjs: params.allDetectedCnpjs,
+    detectedCompanyName: params.detectedCompanyName,
+    issuerOrBank: params.issuerOrBank,
+    summary: `${params.subject}\n${params.summary || ''}\n${params.bodyText.slice(0, 1500)}`,
+    fileName: params.fileName,
+    textPreview: params.textPreview,
+  });
+  if (docMatch.company) return docMatch.company;
 
   // 3. Match by sender email on non-master client companies (contactEmail / createdByEmail)
   const byClientContact = clientCompanies.find(
@@ -204,6 +203,8 @@ async function splitPdfAttachmentOnServer(
     documentNumber?: string;
     amount?: number;
     detectedCnpj?: string;
+    allDetectedCnpjs?: string[];
+    detectedCompanyName?: string;
     summary: string;
     aiClassified: boolean;
   }> | null
@@ -298,6 +299,8 @@ async function splitPdfAttachmentOnServer(
     documentNumber?: string;
     amount?: number;
     detectedCnpj?: string;
+    allDetectedCnpjs?: string[];
+    detectedCompanyName?: string;
     summary: string;
     aiClassified: boolean;
   }> = [];
@@ -324,6 +327,14 @@ async function splitPdfAttachmentOnServer(
       documentNumber: first.documentNumber,
       amount: bucket.pages.reduce((sum, p) => sum + (p.amount || 0), 0) || undefined,
       detectedCnpj: first.detectedCnpj,
+      allDetectedCnpjs: Array.from(
+        new Set(
+          bucket.pages
+            .flatMap((p) => [p.detectedCnpj, ...(p.allDetectedCnpjs || [])])
+            .filter((x): x is string => Boolean(x))
+        )
+      ),
+      detectedCompanyName: bucket.pages.find((p) => p.detectedCompanyName)?.detectedCompanyName || first.issuerOrBank,
       summary: first.summary,
       aiClassified: bucket.pages.some((p) => p.aiClassified),
     });
@@ -532,6 +543,10 @@ export async function syncEmailInbox(options?: {
                 bodyText,
                 fileName: grp.fileName,
                 detectedCnpj: grp.detectedCnpj,
+                allDetectedCnpjs: grp.allDetectedCnpjs,
+                detectedCompanyName: grp.detectedCompanyName,
+                issuerOrBank: grp.issuerOrBank,
+                summary: grp.summary,
               });
               const targetCompId = matchedComp?.id || 'comp-master';
 
@@ -547,7 +562,7 @@ export async function syncEmailInbox(options?: {
                 issuerOrBank: grp.issuerOrBank,
                 documentNumber: grp.documentNumber,
                 amount: grp.amount,
-                detectedCnpj: grp.detectedCnpj,
+                detectedCnpj: grp.detectedCnpj || matchedComp?.cnpj,
                 summary: grp.summary,
                 aiClassified: grp.aiClassified,
                 confidence: grp.aiClassified ? 94 : 80,
@@ -621,6 +636,11 @@ export async function syncEmailInbox(options?: {
               bodyText,
               fileName: origName,
               detectedCnpj: aiClass.detectedCnpj,
+              allDetectedCnpjs: aiClass.allDetectedCnpjs,
+              detectedCompanyName: aiClass.detectedCompanyName,
+              issuerOrBank: aiClass.issuerOrBank,
+              summary: aiClass.summary,
+              textPreview,
             });
             const targetCompId = matchedComp?.id || 'comp-master';
 
@@ -636,7 +656,7 @@ export async function syncEmailInbox(options?: {
               issuerOrBank: aiClass.issuerOrBank,
               documentNumber: aiClass.documentNumber,
               amount: aiClass.amount,
-              detectedCnpj: aiClass.detectedCnpj,
+              detectedCnpj: aiClass.detectedCnpj || matchedComp?.cnpj,
               summary: aiClass.summary,
               aiClassified: aiClass.aiClassified,
               confidence: aiClass.confidence,

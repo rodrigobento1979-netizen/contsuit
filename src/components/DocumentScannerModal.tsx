@@ -32,6 +32,7 @@ interface DocumentScannerModalProps {
   onClose: () => void;
   currentUser: User;
   currentCompany: Company;
+  allCompanies?: Company[];
   showToast: (text: string, type?: 'success' | 'error') => void;
   onDocumentSaved: (doc: CompanyDocument) => void;
 }
@@ -41,6 +42,7 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
   onClose,
   currentUser,
   currentCompany,
+  allCompanies,
   showToast,
   onDocumentSaved,
 }) => {
@@ -225,6 +227,11 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
       const fileName = `${cleanTitle}.pdf`;
       const nowIso = new Date().toISOString();
 
+      const isMaster = isMasterUser(currentUser);
+      const allowedComps = isMaster && Array.isArray(allCompanies) && allCompanies.length > 0
+        ? allCompanies
+        : [lockedCompany];
+
       let finalDoc: CompanyDocument = {
         id: docId,
         companyId: lockedCompany.id,
@@ -247,15 +254,27 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
         ofxStatus: 'idle',
       };
 
-      // 1. Save immediately to server API (preserves same docId for cross-device sync)
+      // 1. Save immediately to server API with autoClassify + CNPJ/Company routing (Master only)
       let apiSynced = false;
       try {
         const apiRes = await fetch('/api/documents', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            ...finalDoc,
-            autoClassify: false,
+            id: docId,
+            companyId: lockedCompany.id,
+            fileName,
+            mimeType: 'application/pdf',
+            fileSize: pdfBytes.length,
+            fileBase64: base64Pdf.length <= 3_300_000 ? base64Pdf : undefined,
+            classificationBase64: base64Pdf.length <= 2_200_000 ? base64Pdf : undefined,
+            competenceMonth: nowIso.slice(0, 7),
+            documentDate: nowIso.slice(0, 10),
+            uploadedBy: currentUser.name.slice(0, 150),
+            ofxStatus: 'idle',
+            autoClassify: true,
+            autoRouteByCompany: isMaster && allowedComps.length > 1,
+            allowedCompanyIds: allowedComps.map((c) => c.id),
           }),
         });
         if (apiRes.ok) {
@@ -276,10 +295,12 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
         console.warn('API save scanned doc error:', apiErr);
       }
 
+      const targetCompanyId = finalDoc.companyId || lockedCompany.id;
+
       // 2. Save to Firestore with exact same ID for instant real-time cross-device sync
       let firestoreSynced = false;
       try {
-        await saveDocumentToFirestore(lockedCompany.id, finalDoc);
+        await saveDocumentToFirestore(targetCompanyId, finalDoc);
         firestoreSynced = true;
       } catch (fErr) {
         console.warn('Firestore save scanned doc warning:', fErr);
@@ -289,7 +310,7 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
         throw new Error('Falha de conexão ao sincronizar o documento com o servidor. Tente novamente.');
       }
 
-      // 3. Save binary locally to IndexedDB & update local cache
+      // 3. Save binary locally to IndexedDB & update local cache for target company
       try {
         await saveBlobToIdb(finalDoc.id, base64Pdf);
       } catch (idbErr) {
@@ -297,7 +318,7 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
       }
 
       try {
-        const cacheKey = `contsuite_cached_docs_${lockedCompany.id}`;
+        const cacheKey = `contsuite_cached_docs_${targetCompanyId}`;
         const raw = localStorage.getItem(cacheKey);
         const existingList: CompanyDocument[] = raw ? JSON.parse(raw) : [];
         const { fileBase64: _, ...metaOnly } = finalDoc;
@@ -308,9 +329,18 @@ export const DocumentScannerModal: React.FC<DocumentScannerModalProps> = ({
       // 4. Notify open DocumentsView immediately in same window/tab
       window.dispatchEvent(new CustomEvent('contsuite:document-saved', { detail: finalDoc }));
 
+      const routedComp =
+        targetCompanyId !== lockedCompany.id
+          ? allowedComps.find((c) => c.id === targetCompanyId)
+          : undefined;
+
       stopCamera();
       onDocumentSaved(finalDoc);
-      showToast(`"${fileName}" enviado e sincronizado com a plataforma!`);
+      showToast(
+        routedComp
+          ? `"${fileName}" identificado e arquivado na pasta ${routedComp.fantasyName || routedComp.name}!`
+          : `"${fileName}" enviado e sincronizado com a plataforma!`
+      );
       onClose();
     } catch (err: any) {
       console.error('Error generating PDF from scanned images:', err);

@@ -187,7 +187,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               <p className="text-xs sm:text-sm text-slate-500 mt-1 font-medium flex items-center gap-2">
                 <span>Bem-vindo ao <span className="text-teal-700 font-bold">ContSuite</span></span>
                 <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-teal-50 text-teal-700 border border-teal-200">
-                  v1.1
+                  v1.2
                 </span>
               </p>
             </div>
@@ -391,7 +391,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           <div className="bg-white rounded-2xl max-w-md w-full max-h-[90dvh] overflow-y-auto p-5 sm:p-6 shadow-2xl space-y-4">
             <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
               <Sparkles className="w-5 h-5 text-teal-600" />
-              Central de Ajuda ContSuite v1.1
+              Central de Ajuda ContSuite v1.2
             </h3>
             <div className="text-xs text-slate-600 space-y-2.5 leading-relaxed">
               <p>
@@ -403,10 +403,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 Utilize a autenticação direta pelo Google com o mesmo e-mail cadastrado ou solicite a reemissão ao administrador do escritório.
               </p>
               <p>
-                <strong>Recursos da Versão 1.1:</strong><br />
-                • Câmera mobile e envio de fotos convertidos automaticamente para PDF ultracomprimido e sincronizados na hora.<br />
-                • Arquivos &amp; Kanban: Notas Fiscais processadas geram OFX automaticamente, com seleção múltipla (radio) para unir vários documentos em 1 único arquivo OFX.<br />
-                • Conversor OFX c/ IA, Ativo Permanente CPC 27, Honorários e Exportação contábil (Domínio, NG/Keevo, Questor).
+                <strong>Novidades e Melhorias da Versão 1.2:</strong><br />
+                • Identificação automática de Empresa e CNPJ (inclusive XMLs de NF-e) com arquivamento direto nas pastas do Explorador ([Nome] - [CNPJ]).<br />
+                • Exclusão definitiva sincronizada entre navegador, servidor e Firestore (incluindo remoção de chunks e bloqueio anti-ressurreição).<br />
+                • Câmera mobile com PDF ultracomprimido, Notas Fiscais → OFX em lote (seletor radio) e pré-visualização sincronizada entre celular e desktop.
               </p>
             </div>
             <button

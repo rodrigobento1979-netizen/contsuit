@@ -196,7 +196,7 @@ export default function App() {
 
   // Synchronize document title and icon in browser tab
   useEffect(() => {
-    document.title = 'ContSuite v1.1 - Sistema Contábil';
+    document.title = 'ContSuite v1.2 - Sistema Contábil';
   }, []);
 
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
@@ -1485,7 +1485,7 @@ export default function App() {
         companyToEdit={companyToEdit}
       />
 
-      {/* Help Center & Changelog Modal (v1.1) */}
+      {/* Help Center & Changelog Modal (v1.2) */}
       <HelpCenterModal
         isOpen={isHelpModalOpen}
         onClose={() => setIsHelpModalOpen(false)}
@@ -1499,6 +1499,7 @@ export default function App() {
         onClose={() => setIsScannerModalOpen(false)}
         currentUser={currentUser}
         currentCompany={currentCompany}
+        allCompanies={allCompanies}
         showToast={showToast}
         onDocumentSaved={(doc) => {
           if (activeTab !== 'documents') setActiveTab('documents');

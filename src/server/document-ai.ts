@@ -25,6 +25,8 @@ export interface DocumentClassificationResult {
   documentNumber?: string;
   amount?: number;
   detectedCnpj?: string;
+  allDetectedCnpjs?: string[];
+  detectedCompanyName?: string;
   summary: string;
   aiClassified: boolean;
 }
@@ -59,6 +61,82 @@ function normalizeMimeType(mimeType: string, fileName?: string): string {
   return clean || 'application/octet-stream';
 }
 
+function formatCnpjDigits(digits: string): string {
+  const clean = (digits || '').replace(/\D/g, '');
+  if (clean.length !== 14) return digits;
+  return clean.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+}
+
+export function extractAllCnpjsFromText(text?: string): string[] {
+  if (!text) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+
+  const formattedMatches = text.match(/\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}/g) || [];
+  for (const m of formattedMatches) {
+    const digits = m.replace(/\D/g, '');
+    if (digits.length === 14 && !seen.has(digits)) {
+      seen.add(digits);
+      out.push(formatCnpjDigits(digits));
+    }
+  }
+
+  const rawXmlOrLabelMatches = text.match(/(?:<CNPJ[^>]*>|cnpj[^0-9]{0,8})(\d{14})/gi) || [];
+  for (const m of rawXmlOrLabelMatches) {
+    const digits = m.replace(/\D/g, '');
+    if (digits.length === 14 && !seen.has(digits)) {
+      seen.add(digits);
+      out.push(formatCnpjDigits(digits));
+    }
+  }
+
+  return out;
+}
+
+function extractXmlFields(xmlText?: string): {
+  cnpjs: string[];
+  names: string[];
+  issuer?: string;
+  docNumber?: string;
+  docDate?: string;
+  amount?: number;
+} {
+  if (!xmlText || !xmlText.includes('<')) return { cnpjs: [], names: [] };
+
+  const cnpjs = extractAllCnpjsFromText(xmlText);
+  const names: string[] = [];
+  const tagNames = ['xNome', 'xFant', 'RazaoSocial', 'NomeFantasia'];
+  for (const tag of tagNames) {
+    const regex = new RegExp(`<${tag}[^>]*>([^<]{2,120})</${tag}>`, 'gi');
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(xmlText)) !== null) {
+      const cleaned = match[1].replace(/\s+/g, ' ').trim();
+      if (cleaned && !names.includes(cleaned)) {
+        names.push(cleaned);
+      }
+    }
+  }
+
+  const nfMatch = xmlText.match(/<(?:nNF|Numero|nCT)[^>]*>(\d{1,20})<\/(?:nNF|Numero|nCT)>/i);
+  const docNumber = nfMatch ? nfMatch[1].trim() : undefined;
+
+  const dateMatch = xmlText.match(/<(?:dhEmi|dEmi|DataEmissao)[^>]*>(\d{4}-\d{2}-\d{2})/i);
+  const docDate = dateMatch ? dateMatch[1] : undefined;
+
+  const valMatch = xmlText.match(/<(?:vNF|ValorServicos|ValorLiquidoNfse|vTPrest)[^>]*>([\d.,]+)<\/(?:vNF|ValorServicos|ValorLiquidoNfse|vTPrest)>/i);
+  const parsedVal = valMatch ? Number(valMatch[1].replace(',', '.')) : NaN;
+  const amount = !isNaN(parsedVal) && parsedVal > 0 ? parsedVal : undefined;
+
+  return {
+    cnpjs,
+    names,
+    issuer: names[0],
+    docNumber,
+    docDate,
+    amount,
+  };
+}
+
 /**
  * Classificação determinística rápida por nome, extensão e conteúdo textual (fallback zero-erro)
  */
@@ -69,17 +147,20 @@ export function classifyDocumentHeuristically(
 ): DocumentClassificationResult {
   const lowerName = (fileName || '').toLowerCase();
   const lowerText = (textContent || '').toLowerCase();
-  const combined = `${lowerName}\n${lowerText.slice(0, 4000)}`;
+  const combined = `${lowerName}\n${lowerText.slice(0, 6000)}`;
   const nowMonth = new Date().toISOString().slice(0, 7);
 
-  // Detect CNPJ in text if available
-  const cnpjMatch = (textContent || '').match(/\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
-  const detectedCnpj = cnpjMatch ? cnpjMatch[0] : undefined;
+  // Detect all CNPJs & XML names in text + filename
+  const allDetectedCnpjs = extractAllCnpjsFromText(`${textContent || ''}\n${fileName || ''}`);
+  const xmlMeta = extractXmlFields(textContent);
+  const mergedCnpjs = Array.from(new Set([...xmlMeta.cnpjs, ...allDetectedCnpjs]));
+  const detectedCnpj = mergedCnpjs[0];
+  const detectedCompanyName = xmlMeta.names.slice(0, 2).join(' | ') || undefined;
 
   // Detect competence YYYY-MM or MM/YYYY
-  let competenceMonth = nowMonth;
+  let competenceMonth = xmlMeta.docDate ? xmlMeta.docDate.slice(0, 7) : nowMonth;
   const mmYyyyMatch = combined.match(/\b(0[1-9]|1[0-2])\/(20\d{2})\b/);
-  if (mmYyyyMatch) {
+  if (!xmlMeta.docDate && mmYyyyMatch) {
     competenceMonth = `${mmYyyyMatch[2]}-${mmYyyyMatch[1]}`;
   }
 
@@ -97,8 +178,16 @@ export function classifyDocumentHeuristically(
       category: 'nota_fiscal',
       confidence: 96,
       competenceMonth,
+      documentDate: xmlMeta.docDate,
+      issuerOrBank: xmlMeta.issuer,
+      documentNumber: xmlMeta.docNumber,
+      amount: xmlMeta.amount,
       detectedCnpj,
-      summary: 'Documento fiscal eletrônico (XML NF-e / NFS-e / CT-e) identificado automaticamente.',
+      allDetectedCnpjs: mergedCnpjs,
+      detectedCompanyName,
+      summary: xmlMeta.issuer
+        ? `Nota Fiscal XML (${xmlMeta.issuer}${xmlMeta.docNumber ? ` Nº ${xmlMeta.docNumber}` : ''}).`.slice(0, 180)
+        : 'Documento fiscal eletrônico (XML NF-e / NFS-e / CT-e) identificado automaticamente.',
       aiClassified: false,
     };
   }
@@ -118,15 +207,17 @@ export function classifyDocumentHeuristically(
     combined.includes('nubank') ||
     combined.includes('inter')
   ) {
-    return {
-      category: 'extrato',
-      confidence: 88,
-      competenceMonth,
-      detectedCnpj,
-      summary: 'Extrato ou movimentação bancária identificada pelo padrão do arquivo.',
-      aiClassified: false,
-    };
-  }
+      return {
+        category: 'extrato',
+        confidence: 88,
+        competenceMonth,
+        detectedCnpj,
+        allDetectedCnpjs: mergedCnpjs,
+        detectedCompanyName,
+        summary: 'Extrato ou movimentação bancária identificada pelo padrão do arquivo.',
+        aiClassified: false,
+      };
+    }
 
   if (
     combined.includes('danfe') ||
@@ -143,6 +234,8 @@ export function classifyDocumentHeuristically(
       confidence: 88,
       competenceMonth,
       detectedCnpj,
+      allDetectedCnpjs: mergedCnpjs,
+      detectedCompanyName,
       summary: 'Nota fiscal ou documento fiscal de mercadoria/serviço identificado.',
       aiClassified: false,
     };
@@ -169,6 +262,8 @@ export function classifyDocumentHeuristically(
       confidence: 86,
       competenceMonth,
       detectedCnpj,
+      allDetectedCnpjs: mergedCnpjs,
+      detectedCompanyName,
       summary: 'Guia de recolhimento de tributo ou obrigação fiscal identificada.',
       aiClassified: false,
     };
@@ -188,6 +283,8 @@ export function classifyDocumentHeuristically(
       confidence: 82,
       competenceMonth,
       detectedCnpj,
+      allDetectedCnpjs: mergedCnpjs,
+      detectedCompanyName,
       summary: 'Comprovante de pagamento, transferência ou recibo financeiro.',
       aiClassified: false,
     };
@@ -214,6 +311,8 @@ export function classifyDocumentHeuristically(
       confidence: 82,
       competenceMonth,
       detectedCnpj,
+      allDetectedCnpjs: mergedCnpjs,
+      detectedCompanyName,
       summary: 'Documento societário, trabalhista ou relatório contábil identificado.',
       aiClassified: false,
     };
@@ -224,6 +323,8 @@ export function classifyDocumentHeuristically(
     confidence: 65,
     competenceMonth,
     detectedCnpj,
+    allDetectedCnpjs: mergedCnpjs,
+    detectedCompanyName,
     summary: 'Documento contábil geral enviado para organização e conferência.',
     aiClassified: false,
   };
@@ -257,11 +358,8 @@ export async function classifyDocumentWithAI(params: {
 
   const heuristic = classifyDocumentHeuristically(params.fileName, normMime, decodedText);
 
-  // Fast-path for unambiguous XML NF-e / OFX files without wasting AI quota
-  if (
-    params.fileName.toLowerCase().endsWith('.ofx') ||
-    (params.fileName.toLowerCase().endsWith('.xml') && heuristic.category === 'nota_fiscal' && !decodedText)
-  ) {
+  // Fast-path for unambiguous OFX files without wasting AI quota
+  if (params.fileName.toLowerCase().endsWith('.ofx')) {
     return heuristic;
   }
 
@@ -336,7 +434,15 @@ Escreva "summary" em português claro e objetivo (máximo 1 frase curta, até 12
       },
       detectedCnpj: {
         type: Type.STRING,
-        description: 'CNPJ identificado no documento (ex: 00.000.000/0001-00)',
+        description: 'CNPJ principal identificado no documento (ex: 00.000.000/0001-00)',
+      },
+      secondaryCnpj: {
+        type: Type.STRING,
+        description: 'Segundo CNPJ encontrado (ex: CNPJ do destinatário/cliente em nota fiscal)',
+      },
+      detectedCompanyName: {
+        type: Type.STRING,
+        description: 'Razão social ou nome fantasia da empresa titular ou destinatária do documento',
       },
       summary: {
         type: Type.STRING,
@@ -363,15 +469,24 @@ Escreva "summary" em português claro e objetivo (máximo 1 frase curta, até 12
       ? parsed.competenceMonth
       : heuristic.competenceMonth;
 
+    const aiCnpjs = extractAllCnpjsFromText(
+      [parsed.detectedCnpj, parsed.secondaryCnpj, parsed.summary].filter(Boolean).join(' ')
+    );
+    const mergedCnpjs = Array.from(
+      new Set([...aiCnpjs, ...(heuristic.allDetectedCnpjs || [])])
+    );
+
     return {
       category: sanitizeCategory(parsed.category),
       confidence: Math.min(100, Math.max(50, Number(parsed.confidence) || 90)),
       competenceMonth: validMonth,
-      documentDate: /^\d{4}-\d{2}-\d{2}$/.test(parsed.documentDate || '') ? parsed.documentDate : undefined,
-      issuerOrBank: parsed.issuerOrBank ? String(parsed.issuerOrBank).slice(0, 100) : undefined,
-      documentNumber: parsed.documentNumber ? String(parsed.documentNumber).slice(0, 60) : undefined,
-      amount: typeof parsed.amount === 'number' && !isNaN(parsed.amount) && parsed.amount > 0 ? parsed.amount : undefined,
-      detectedCnpj: parsed.detectedCnpj ? String(parsed.detectedCnpj).slice(0, 25) : heuristic.detectedCnpj,
+      documentDate: /^\d{4}-\d{2}-\d{2}$/.test(parsed.documentDate || '') ? parsed.documentDate : heuristic.documentDate,
+      issuerOrBank: parsed.issuerOrBank ? String(parsed.issuerOrBank).slice(0, 100) : heuristic.issuerOrBank,
+      documentNumber: parsed.documentNumber ? String(parsed.documentNumber).slice(0, 60) : heuristic.documentNumber,
+      amount: typeof parsed.amount === 'number' && !isNaN(parsed.amount) && parsed.amount > 0 ? parsed.amount : heuristic.amount,
+      detectedCnpj: parsed.detectedCnpj ? String(parsed.detectedCnpj).slice(0, 25) : (mergedCnpjs[0] || heuristic.detectedCnpj),
+      allDetectedCnpjs: mergedCnpjs,
+      detectedCompanyName: parsed.detectedCompanyName ? String(parsed.detectedCompanyName).slice(0, 120) : heuristic.detectedCompanyName,
       summary: parsed.summary ? String(parsed.summary).slice(0, 180) : heuristic.summary,
       aiClassified: true,
     };
@@ -395,6 +510,8 @@ export interface PageClassificationItem {
   documentNumber?: string;
   amount?: number;
   detectedCnpj?: string;
+  allDetectedCnpjs?: string[];
+  detectedCompanyName?: string;
   summary: string;
   aiClassified: boolean;
 }
@@ -476,6 +593,8 @@ Retorne um array "pages" com EXATAMENTE ${pageCount} itens (pageNumber de 1 a ${
             documentNumber: { type: Type.STRING },
             amount: { type: Type.NUMBER },
             detectedCnpj: { type: Type.STRING },
+            secondaryCnpj: { type: Type.STRING },
+            detectedCompanyName: { type: Type.STRING },
             summary: { type: Type.STRING, description: 'Resumo curto de até 100 caracteres da página' },
           },
           required: ['pageNumber', 'category', 'groupLabel', 'summary'],
@@ -518,6 +637,9 @@ Retorne um array "pages" com EXATAMENTE ${pageCount} itens (pageNumber de 1 a ${
       const validMonth = /^\d{4}-\d{2}$/.test(p.competenceMonth || '')
         ? p.competenceMonth
         : heuristic.competenceMonth;
+      const pageCnpjs = extractAllCnpjsFromText(
+        [p.detectedCnpj, p.secondaryCnpj, p.summary].filter(Boolean).join(' ')
+      );
       byRelPage.set(relNum, {
         pageNumber: offset + relNum,
         category: cat,
@@ -527,7 +649,9 @@ Retorne um array "pages" com EXATAMENTE ${pageCount} itens (pageNumber de 1 a ${
         documentDate: /^\d{4}-\d{2}-\d{2}$/.test(p.documentDate || '') ? p.documentDate : undefined,
         documentNumber: p.documentNumber ? String(p.documentNumber).slice(0, 60) : undefined,
         amount: typeof p.amount === 'number' && !isNaN(p.amount) && p.amount > 0 ? p.amount : undefined,
-        detectedCnpj: p.detectedCnpj ? String(p.detectedCnpj).slice(0, 25) : heuristic.detectedCnpj,
+        detectedCnpj: p.detectedCnpj ? String(p.detectedCnpj).slice(0, 25) : (pageCnpjs[0] || heuristic.detectedCnpj),
+        allDetectedCnpjs: pageCnpjs,
+        detectedCompanyName: p.detectedCompanyName ? String(p.detectedCompanyName).slice(0, 120) : undefined,
         summary: p.summary ? String(p.summary).slice(0, 160) : heuristic.summary,
         aiClassified: true,
       });
@@ -749,4 +873,85 @@ Extraia os metadados estruturados e gere a sugestão de lançamento contábil em
 
   return buildFallback({ ...heuristic, category: fallbackCategory });
 }
+
+function normalizeMatchStr(value?: string): string {
+  return (value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function matchRegisteredCompanyServer<T extends { id: string; cnpj: string; name: string; fantasyName?: string }>(params: {
+  companies: T[];
+  detectedCnpj?: string;
+  allDetectedCnpjs?: string[];
+  detectedCompanyName?: string;
+  issuerOrBank?: string;
+  summary?: string;
+  fileName?: string;
+  textPreview?: string;
+}): { company?: T; matchedBy?: 'cnpj' | 'name' } {
+  const { companies } = params;
+  if (!Array.isArray(companies) || companies.length === 0) return {};
+
+  const ordered = [
+    ...companies.filter((c) => c.id !== 'comp-master'),
+    ...companies.filter((c) => c.id === 'comp-master'),
+  ];
+
+  const candidateDigits: string[] = [];
+  const collectDigitsFrom = (txt?: string) => {
+    for (const c of extractAllCnpjsFromText(txt)) {
+      const d = c.replace(/\D/g, '');
+      if (d.length === 14 && !candidateDigits.includes(d)) {
+        candidateDigits.push(d);
+      }
+    }
+  };
+
+  collectDigitsFrom(params.detectedCnpj);
+  if (Array.isArray(params.allDetectedCnpjs)) {
+    params.allDetectedCnpjs.forEach((c) => collectDigitsFrom(c));
+  }
+  collectDigitsFrom(params.textPreview);
+  collectDigitsFrom(params.summary);
+  collectDigitsFrom(params.fileName);
+
+  for (const digits of candidateDigits) {
+    const found = ordered.find((c) => (c.cnpj || '').replace(/\D/g, '') === digits);
+    if (found) return { company: found, matchedBy: 'cnpj' };
+  }
+
+  const haystack = normalizeMatchStr(
+    [
+      params.detectedCompanyName,
+      params.issuerOrBank,
+      params.summary,
+      params.fileName,
+      params.textPreview?.slice(0, 4000),
+    ]
+      .filter(Boolean)
+      .join(' ')
+  );
+
+  if (haystack.length >= 3) {
+    for (const comp of ordered) {
+      const variants = [
+        normalizeMatchStr(comp.fantasyName),
+        normalizeMatchStr(comp.name),
+      ].filter((v) => v.length >= 4);
+      for (const variant of variants) {
+        if (haystack.includes(variant)) {
+          return { company: comp, matchedBy: 'name' };
+        }
+      }
+    }
+  }
+
+  return {};
+}
+
 

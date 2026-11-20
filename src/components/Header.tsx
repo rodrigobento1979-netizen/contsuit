@@ -72,7 +72,7 @@ export const Header: React.FC<HeaderProps> = ({
                 {currentInfo.title}
               </h2>
               <span className="hidden sm:inline-block text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-white/15 text-[#e0f2f1] border border-white/20 shrink-0">
-                ContSuite v1.1
+                ContSuite v1.2
               </span>
             </div>
             <p className="text-[11px] text-[#b2dfdb] hidden sm:block truncate">

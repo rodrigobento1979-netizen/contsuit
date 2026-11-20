@@ -30,6 +30,10 @@ import {
   saveDocumentToFirestore,
   saveStatementToFirestore,
 } from '../firebase/service';
+import {
+  getDeletedDocumentIdsLocal,
+  isDocumentDeletedLocal,
+} from '../utils/documentTombstones';
 
 export interface DocOfxJobState {
   docId: string;
@@ -705,8 +709,35 @@ export const OfxAgentProvider: React.FC<{
     }));
   }, []);
 
+  useEffect(() => {
+    const handleDeleted = (e: Event) => {
+      const ev = e as CustomEvent<{ docId?: string }>;
+      const docId = ev.detail?.docId;
+      if (!docId) return;
+      queuedIdsRef.current.delete(docId);
+      queuedNonExtratoIdsRef.current.delete(docId);
+      setDocJobs((prev) => {
+        if (!prev[docId]) return prev;
+        const copy = { ...prev };
+        delete copy[docId];
+        return copy;
+      });
+      setDocProcessJobs((prev) => {
+        if (!prev[docId]) return prev;
+        const copy = { ...prev };
+        delete copy[docId];
+        return copy;
+      });
+    };
+    window.addEventListener('contsuite:document-deleted', handleDeleted);
+    return () => window.removeEventListener('contsuite:document-deleted', handleDeleted);
+  }, []);
+
   const updateDocOfxMetadata = useCallback(
     async (docItem: CompanyDocument, patch: Partial<CompanyDocument>) => {
+      if (!docItem?.id || isDocumentDeletedLocal(docItem.companyId, docItem.id)) {
+        return;
+      }
       setLastDocumentPatch({ docId: docItem.id, patch, ts: Date.now() });
 
       try {
@@ -716,6 +747,10 @@ export const OfxAgentProvider: React.FC<{
           body: JSON.stringify(patch),
         });
       } catch {}
+
+      if (isDocumentDeletedLocal(docItem.companyId, docItem.id)) {
+        return;
+      }
 
       try {
         await saveDocumentToFirestore(docItem.companyId, {
@@ -923,7 +958,9 @@ export const OfxAgentProvider: React.FC<{
           candidates = Array.from(map.values());
         }
 
+        const deletedSet = new Set(getDeletedDocumentIdsLocal(currentCompany.id));
         const eligible = candidates.filter((d) => {
+          if (deletedSet.has(d.id) || isDocumentDeletedLocal(d.companyId, d.id)) return false;
           if (d.category !== 'extrato') return false;
           if (d.ofxStatementId || d.ofxStatus === 'done') return false;
           if (queuedIdsRef.current.has(d.id)) return false;
@@ -1285,7 +1322,9 @@ export const OfxAgentProvider: React.FC<{
           candidates = Array.from(map.values());
         }
 
+        const deletedSet = new Set(getDeletedDocumentIdsLocal(currentCompany.id));
         const eligible = candidates.filter((d) => {
+          if (deletedSet.has(d.id) || isDocumentDeletedLocal(d.companyId, d.id)) return false;
           if (d.category === 'extrato') return false;
           if (queuedNonExtratoIdsRef.current.has(d.id)) return false;
           if (d.status === 'concluido' && d.ofxStatus === 'done') return false;

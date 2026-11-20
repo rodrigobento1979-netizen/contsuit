@@ -90,16 +90,16 @@ export const AiGuideHomeView: React.FC<AiGuideHomeViewProps> = ({
     },
     {
       id: 'documents-scanner',
-      title: 'Arquivos, Câmera PDF & OFX em Lote',
+      title: 'Arquivos, Pastas por CNPJ, Câmera PDF & OFX',
       category: 'Ferramentas',
       icon: Sparkles,
       targetTab: 'documents',
-      summary: 'Digitalização móvel em PDF ultracomprimido, Notas Fiscais para OFX e consolidação em lote.',
+      summary: 'Identificação automática de Empresa/CNPJ, PDF comprimido, Notas Fiscais para OFX e exclusão definitiva.',
       steps: [
-        'Use o botão "Câmera" no menu lateral ou "Upload" em Arquivos: toda foto é convertida em PDF ultracomprimido e sincronizada na hora.',
+        'Use "Câmera" ou "Upload": fotos viram PDF ultracomprimido e documentos com CNPJ/Nome (incluindo NF-e XML) são arquivados automaticamente na pasta da empresa no Explorador.',
         'Clique em "Processar" ou "Reprocessar" em Notas Fiscais para enviar os lançamentos automaticamente ao Conversor OFX.',
         'Use os seletores circulares (radio) para marcar vários arquivos e clicar em "Transformar em Único OFX".',
-        'Cada conta acessa exclusivamente seus próprios arquivos e empresas cadastradas.',
+        'A exclusão apaga em definitivo no servidor, cache local e nuvem Firestore, respeitando o isolamento por conta.',
       ],
     },
     {

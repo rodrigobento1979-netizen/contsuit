@@ -36,6 +36,7 @@ import {
   clearDemoData,
   getDocuments,
   getDocumentById,
+  getDeletedDocumentIds,
   createDocument,
   updateDocument,
   deleteDocument,
@@ -44,6 +45,7 @@ import {
   classifyDocumentWithAI,
   analyzePdfPagesWithAI,
   processNonExtratoDocumentWithAI,
+  matchRegisteredCompanyServer,
 } from './document-ai.ts';
 import {
   calculateDepreciationForPeriod,
@@ -1523,6 +1525,32 @@ apiRouter.get('/documents', (req: Request, res: Response) => {
   }
 });
 
+apiRouter.get('/documents/deleted-ids', (_req: Request, res: Response) => {
+  try {
+    return res.json({ deletedIds: getDeletedDocumentIds() });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.get('/documents/counts', (req: Request, res: Response) => {
+  try {
+    const { companyIds } = req.query;
+    const allowedSet =
+      typeof companyIds === 'string' && companyIds.trim()
+        ? new Set(companyIds.split(',').map((s) => s.trim()).filter(Boolean))
+        : null;
+    const counts: Record<string, number> = {};
+    for (const d of getDocuments('all')) {
+      if (allowedSet && !allowedSet.has(d.companyId)) continue;
+      counts[d.companyId] = (counts[d.companyId] || 0) + 1;
+    }
+    return res.json({ counts });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 apiRouter.get('/documents/:id', (req: Request, res: Response) => {
   try {
     const { id } = req.params;
@@ -1633,6 +1661,8 @@ apiRouter.post('/documents', async (req: Request, res: Response) => {
       ofxError,
       sourceGroupLabel,
       autoClassify = true,
+      autoRouteByCompany = false,
+      allowedCompanyIds,
     } = req.body || {};
 
     if (!companyId || !fileName) {
@@ -1646,6 +1676,8 @@ apiRouter.post('/documents', async (req: Request, res: Response) => {
     let finalDocNum = documentNumber;
     let finalAmount = amount !== undefined && amount !== null && amount !== '' ? Number(amount) : undefined;
     let finalCnpj = detectedCnpj;
+    let finalAllCnpjs: string[] = [];
+    let finalCompanyName: string | undefined;
     let finalSummary = summary;
     let finalAiClassified = Boolean(aiClassified);
     let finalConfidence = confidence !== undefined ? Number(confidence) : undefined;
@@ -1664,14 +1696,42 @@ apiRouter.post('/documents', async (req: Request, res: Response) => {
       finalDocNum = finalDocNum || aiResult.documentNumber;
       finalAmount = finalAmount ?? aiResult.amount;
       finalCnpj = finalCnpj || aiResult.detectedCnpj;
+      finalAllCnpjs = aiResult.allDetectedCnpjs || [];
+      finalCompanyName = aiResult.detectedCompanyName;
       finalSummary = finalSummary || aiResult.summary;
       finalAiClassified = aiResult.aiClassified;
       finalConfidence = aiResult.confidence;
     }
 
+    let targetCompanyId = String(companyId);
+    let matchedCompanyObj = getCompanyById(targetCompanyId);
+    if (autoRouteByCompany) {
+      const allComps = getCompanies();
+      const allowedComps = Array.isArray(allowedCompanyIds) && allowedCompanyIds.length > 0
+        ? allComps.filter((c) => allowedCompanyIds.includes(c.id))
+        : allComps;
+      const routeMatch = matchRegisteredCompanyServer({
+        companies: allowedComps,
+        detectedCnpj: finalCnpj,
+        allDetectedCnpjs: finalAllCnpjs,
+        detectedCompanyName: finalCompanyName,
+        issuerOrBank: finalIssuer,
+        summary: finalSummary,
+        fileName: String(fileName),
+        textPreview: typeof textPreview === 'string' ? textPreview : undefined,
+      });
+      if (routeMatch.company) {
+        targetCompanyId = routeMatch.company.id;
+        matchedCompanyObj = routeMatch.company;
+        if (!finalCnpj && routeMatch.company.cnpj) {
+          finalCnpj = routeMatch.company.cnpj;
+        }
+      }
+    }
+
     const created = createDocument({
       id: typeof id === 'string' ? id : undefined,
-      companyId: String(companyId),
+      companyId: targetCompanyId,
       fileName: String(fileName).slice(0, 200),
       mimeType: String(mimeType || 'application/octet-stream').slice(0, 120),
       fileSize: Number(fileSize || 0),
@@ -1698,10 +1758,10 @@ apiRouter.post('/documents', async (req: Request, res: Response) => {
     const { fileBase64: savedB64, ...meta } = created;
 
     // Disparar notificação por e-mail para contsuitesistemas@gmail.com
-    const compObj = getCompanyById(companyId);
+    const compObj = matchedCompanyObj || getCompanyById(targetCompanyId);
     void sendEmail({
       to: 'contsuitesistemas@gmail.com',
-      subject: `[ContSuite] Novo Arquivo Postado - ${compObj?.fantasyName || compObj?.name || companyId}`,
+      subject: `[ContSuite] Novo Arquivo Postado - ${compObj?.fantasyName || compObj?.name || targetCompanyId}`,
       html: `
         <div style="font-family: Arial, sans-serif; color: #1e293b; max-width: 550px; margin: 0 auto; border: 1px solid #14b8a6; border-radius: 12px; padding: 24px; background: #ffffff;">
           <h2 style="color: #004d40; margin-top: 0;">Novo Documento Postado</h2>
@@ -1775,10 +1835,7 @@ apiRouter.delete('/documents/:id', (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const deleted = deleteDocument(id);
-    if (!deleted) {
-      return res.status(404).json({ error: 'Arquivo não encontrado para exclusão.' });
-    }
-    return res.json({ success: true });
+    return res.json({ success: true, deletedFromServer: deleted });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
