@@ -171,20 +171,42 @@ function normalizeDateIso(raw: unknown): string {
   return fallback;
 }
 
+type SheetRole = 'inventory' | 'summary' | 'journal' | 'parameter' | 'other';
+
+function classifySheetRole(name: string): SheetRole {
+  const n = (name || '').toLowerCase();
+  if (/premissas|par[aâ]metros|config|taxas|al[ií]quotas|tabela|instru[cç][oõ]es|ajuda|listas?|auxiliar|apoio|indices?|criterios?/i.test(n)) {
+    return 'parameter';
+  }
+  if (/lan[cç]amento|di[aá]rio|partidas|raz[aã]o|apropria|contabiliza/i.test(n)) {
+    return 'journal';
+  }
+  if (/resumo|sint[eé]tico|consolidado|totais|sum[aá]rio|quadro|balancete|capa/i.test(n)) {
+    return 'summary';
+  }
+  if (/relat[oó]rio|bens|ativo|imobilizado|invent[aá]rio|patrim[oô]nio|cadastro|itens|equipamentos|ve[ií]culos|m[aá]quinas|frota/i.test(n)) {
+    return 'inventory';
+  }
+  return 'other';
+}
+
 function isSummaryTabName(name: string): boolean {
-  return /resumo|sint[eé]tico|consolidado|totais|total|agrupado|capa|sum[aá]rio|quadro|balancete/i.test(name || '');
+  const role = classifySheetRole(name);
+  return role === 'summary' || role === 'journal';
 }
 
 function isTotalOrHeaderNoiseRow(description: string): boolean {
   const d = (description || '').trim().toLowerCase();
-  if (!d || d.length < 2) return true;
-  if (/^(total|total geral|sub-?total|soma|geral|saldo anterior|saldo final|a transportar|transporte)$/i.test(d)) return true;
-  if (/^(descri[cç][aã]o|bem|ativo|item|plaqueta|patrim[oô]nio|hist[oó]rico|conta|grupo)$/i.test(d)) return true;
+  if (!d || d.length < 3) return true;
+  if (/^(total|total geral|totais|sub-?total|soma|geral|saldo|saldo anterior|saldo final|a transportar|transporte)$/i.test(d)) return true;
+  if (/^(descri[cç][aã]o|bem|bens|ativo|ativos|item|itens|plaqueta|patrim[oô]nio|hist[oó]rico|conta|grupo|categoria|classe|status|situa[cç][aã]o|legenda|resumo)$/i.test(d)) return true;
+  if (/^(em deprecia[cç][aã]o|totalmente depreciad[oa]s?|depreciad[oa]s?|baixad[oa]s?|alienad[oa]s?|ativ[oa]s?|inativ[oa]s?|em uso|em manuten[cç][aã]o|sim|n[aã]o|qtd|quantidade)$/i.test(d)) return true;
   return false;
 }
 
 interface ParsedSheetTable {
   name: string;
+  role: SheetRole;
   isSummarySheet: boolean;
   rowCount: number;
   rows: string[][];
@@ -205,7 +227,6 @@ function extractWorkbookTables(buffer: Buffer): ParsedSheetTable[] {
     const sheet = workbook.Sheets[sheetName];
     if (!sheet) continue;
 
-    // Raw rows preserving dates as Date or strings cleanly
     const rawMatrix = XLSX.utils.sheet_to_json<any[]>(sheet, {
       header: 1,
       raw: true,
@@ -222,14 +243,12 @@ function extractWorkbookTables(buffer: Buffer): ParsedSheetTable[] {
         }
         return String(cell).replace(/\s+/g, ' ').trim();
       });
-      // Skip completely empty rows
       if (strRow.every((c) => !c)) continue;
       formattedRows.push(strRow);
     }
 
     if (formattedRows.length === 0) continue;
 
-    // Trim completely empty trailing/leading columns across rows
     const maxCols = Math.max(...formattedRows.map((r) => r.length));
     const nonEmptyColIndices: number[] = [];
     for (let col = 0; col < maxCols; col++) {
@@ -242,15 +261,26 @@ function extractWorkbookTables(buffer: Buffer): ParsedSheetTable[] {
       nonEmptyColIndices.map((colIdx) => r[colIdx] || '')
     );
 
+    const role = classifySheetRole(sheetName);
+    const isSummary = role === 'summary' || role === 'journal';
+    const roleTag =
+      role === 'parameter'
+        ? 'ABA AUXILIAR/PREMISSAS - NÃO SÃO BENS'
+        : role === 'journal'
+          ? 'ABA DE LANÇAMENTOS/RESUMO CONTÁBIL'
+          : role === 'summary'
+            ? 'ABA RESUMIDA/SINTÉTICA'
+            : 'ABA DE BENS/INVENTÁRIO';
+
     const lines = compactRows.map((r, idx) => `[L${idx + 1}] ${r.join(' | ')}`);
-    const isSummary = isSummaryTabName(sheetName) || compactRows.length <= 15;
 
     tables.push({
       name: sheetName,
+      role,
       isSummarySheet: isSummary,
       rowCount: compactRows.length,
       rows: compactRows,
-      textDump: `=== ABA: "${sheetName}" (${compactRows.length} linhas úteis${isSummary ? ' - POSSÍVEL ABA RESUMIDA/SINTÉTICA' : ''}) ===\n${lines.slice(0, 250).join('\n')}`,
+      textDump: `=== ABA: "${sheetName}" (${compactRows.length} linhas úteis • ${roleTag}) ===\n${lines.slice(0, 220).join('\n')}`,
     });
   }
 
@@ -311,15 +341,23 @@ function buildNormalizedCandidate(
 }
 
 /**
- * Fallback determinístico multi-abas caso Gemini esteja indisponível ou em cota 429.
- * Lê todas as abas (inclusive abas resumidas) identificando cabeçalhos ou pares Texto + Valor.
+ * Fallback determinístico multi-abas caso Gemini esteja em pico de demanda ou cota 429.
+ * Prioriza abas de inventário (ou abas resumidas se não houver analítico) e ignora Premissas/KPIs/Lançamentos redundantes.
  */
 function parseSheetsDeterministically(tables: ParsedSheetTable[]): ExtractedAssetCandidate[] {
   const candidates: ExtractedAssetCandidate[] = [];
 
-  for (const table of tables) {
-    // 1. Find likely header row within first 15 rows
-    let headerIdx = -1;
+  const nonParamTables = tables.filter((t) => t.role !== 'parameter');
+  const inventoryTables = nonParamTables.filter((t) => t.role === 'inventory');
+  const otherTables = nonParamTables.filter((t) => t.role === 'other');
+  const summaryTables = nonParamTables.filter((t) => t.role === 'summary');
+
+  const extractFromTable = (table: ParsedSheetTable): ExtractedAssetCandidate[] => {
+    const found: ExtractedAssetCandidate[] = [];
+
+    // Score header rows across first 30 rows to avoid catching top KPI cards/legends
+    let bestRow = -1;
+    let bestScore = -1;
     let descCol = -1;
     let valCol = -1;
     let tagCol = -1;
@@ -331,61 +369,97 @@ function parseSheetsDeterministically(tables: ParsedSheetTable[]): ExtractedAsse
     let nfCol = -1;
     let qtyCol = -1;
 
-    for (let r = 0; r < Math.min(15, table.rows.length); r++) {
-      const row = table.rows[r].map((c) => c.toLowerCase());
-      const foundDesc = row.findIndex((c) =>
-        /descri|bem|ativo|imobilizado|equipamento|conta|grupo|categoria|hist[oó]rico|item|produto|nome/.test(c)
-      );
-      const foundVal = row.findIndex((c) =>
-        /valor|aquisi[cç][aã]o|custo|total|bruto|original|pre[cç]o|montante|vlr/.test(c)
-      );
+    const scanLimit = Math.min(30, table.rows.length);
+    for (let r = 0; r < scanLimit; r++) {
+      const rawRow = table.rows[r];
+      const row = rawRow.map((c) => c.toLowerCase());
+      if (row.filter(Boolean).length < 2) continue;
 
-      if (foundDesc !== -1 || foundVal !== -1) {
-        headerIdx = r;
-        descCol = foundDesc;
-        valCol = foundVal;
-        tagCol = row.findIndex((c) => /plaqueta|patrim|c[oó]digo|tag|tombo|registro/.test(c));
-        dateCol = row.findIndex((c) => /data|aquisi[cç]|compra|entrada|incorpora/.test(c));
-        rateCol = row.findIndex((c) => /taxa|al[ií]quota|%|deprec.*a\.?a/.test(c));
-        deprecCol = row.findIndex((c) => /acumulad|deprecia[cç][aã]o\s*(acum|saldo)|depr\.?\s*ac/.test(c));
-        ccCol = row.findIndex((c) => /centro|setor|departamento|área|area|unidade/.test(c));
-        supplierCol = row.findIndex((c) => /fornecedor|fabricante|marca|emitente/.test(c));
-        nfCol = row.findIndex((c) => /\bnf\b|nota\s*fiscal|nfe|documento|nº\s*nf/.test(c));
-        qtyCol = row.findIndex((c) => /qtd|quant/.test(c));
-        break;
+      const dCol = row.findIndex((c) =>
+        /\b(descri[cç][aã]o|bem|bens|ativo|imobilizado|equipamento|objeto|especifica[cç][aã]o|grupo|classe)\b|descri[cç][aã]o\s+do\s+bem/i.test(c)
+      );
+      const vCol = row.findIndex(
+        (c) =>
+          /(valor|vlr).*(aquisi|compra|original|bruto|bem|total|cont[aá]bil)|\b(valor|vlr|custo|montante|pre[cç]o)\b/i.test(c) &&
+          !/\bdata\b|\bdt\b|deprec|acumulad|residual|l[ií]quido|taxa|al[ií]quota/i.test(c)
+      );
+      const fallbackVCol =
+        vCol !== -1
+          ? vCol
+          : row.findIndex(
+              (c) =>
+                /valor|vlr|custo|bruto|original|montante|vlr\s*aquisi/i.test(c) &&
+                !/\bdata\b|\bdt\b|deprec|acumulad|residual|taxa|al[ií]quota/i.test(c)
+            );
+
+      const tCol = row.findIndex((c) => /plaqueta|patrim|tombo|\btag\b|c[oó]d\.?\s*bem|registro/i.test(c));
+      const dtCol = row.findIndex((c) => /data.*(aquisi|compra|entrada|incorpora)|aquisi[cç][aã]o|\bdata\b/i.test(c));
+      const rtCol = row.findIndex((c) => /taxa|al[ií]quota|%\s*a\.?a|deprec.*%/i.test(c));
+      const dpCol = row.findIndex((c) => /deprec.*acum|acumulad/i.test(c));
+      const cCol = row.findIndex((c) => /centro.*custo|setor|departamento|área|area|unidade|local/i.test(c));
+      const sCol = row.findIndex((c) => /fornecedor|fabricante|marca|emitente/i.test(c));
+      const nCol = row.findIndex((c) => /\b(nf|nf-e|nfe|nota\s*fiscal|n[º°o]?\s*nf)\b/i.test(c));
+      const qCol = row.findIndex((c) => /\b(qtd|qtde|quant|quantidade)\b/i.test(c));
+
+      let score = 0;
+      if (dCol !== -1) score += 2;
+      if (fallbackVCol !== -1) score += 2;
+      if (tCol !== -1) score += 1;
+      if (dtCol !== -1) score += 1;
+      if (rtCol !== -1) score += 1;
+      if (dpCol !== -1) score += 1;
+      if (cCol !== -1) score += 1;
+      if (sCol !== -1) score += 1;
+      if (nCol !== -1) score += 1;
+
+      if (dCol !== -1 && fallbackVCol !== -1 && score > bestScore) {
+        bestScore = score;
+        bestRow = r;
+        descCol = dCol;
+        valCol = fallbackVCol;
+        tagCol = tCol;
+        dateCol = dtCol;
+        rateCol = rtCol;
+        deprecCol = dpCol;
+        ccCol = cCol;
+        supplierCol = sCol;
+        nfCol = nCol;
+        qtyCol = qCol;
       }
     }
 
-    const startRow = headerIdx >= 0 ? headerIdx + 1 : 0;
+    // If no clear header matched with both desc + value, only parse compact summary tables
+    if (bestRow === -1 && table.role !== 'summary' && table.role !== 'other') {
+      return [];
+    }
+
+    const startRow = bestRow >= 0 ? bestRow + 1 : 0;
 
     for (let r = startRow; r < table.rows.length; r++) {
       const row = table.rows[r];
-      let description = descCol >= 0 ? row[descCol] || '' : '';
-      let val = valCol >= 0 ? parseBrazilianNumber(row[valCol]) : 0;
+      let description = descCol >= 0 ? (row[descCol] || '').trim() : '';
+      const rawValCell = valCol >= 0 ? (row[valCol] || '').trim() : '';
+      let val = valCol >= 0 ? parseBrazilianNumber(rawValCell) : 0;
 
-      // In compact/summary tables without standard headers, scan cells smartly
-      if (!description) {
-        const textCells = row.filter((c) => /[a-zA-ZÀ-ÿ]{3,}/.test(c) && !/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(c));
+      if (!description && bestRow === -1) {
+        const textCells = row.filter(
+          (c) => /[a-zA-ZÀ-ÿ]{4,}/.test(c) && !/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(c) && !isTotalOrHeaderNoiseRow(c)
+        );
         description = textCells.sort((a, b) => b.length - a.length)[0] || '';
       }
-      if (val <= 0) {
-        const numericVals = row
-          .map((c) => parseBrazilianNumber(c))
-          .filter((n) => n > 10);
-        if (numericVals.length > 0) {
-          val = Math.max(...numericVals);
-        }
+      if (val <= 0 && bestRow === -1) {
+        const numericVals = row.map((c) => parseBrazilianNumber(c)).filter((n) => n >= 50);
+        if (numericVals.length > 0) val = Math.max(...numericVals);
       }
 
       if (isTotalOrHeaderNoiseRow(description)) continue;
-      if (val <= 0 && description.length < 4) continue;
-      if (val <= 0) continue; // Summary headers without monetary value aren't assets
+      if (val < 10) continue; // Filters out small integer KPI counts (e.g. "Em depreciação | 1")
 
       const qtyRaw = qtyCol >= 0 ? parseBrazilianNumber(row[qtyCol]) : 1;
       const rateRaw = rateCol >= 0 ? parseBrazilianNumber(row[rateCol]) : 0;
       const rateNormalized = rateRaw > 0 && rateRaw < 1 ? Math.round(rateRaw * 100) : rateRaw;
 
-      candidates.push(
+      found.push(
         buildNormalizedCandidate(
           {
             description,
@@ -400,15 +474,30 @@ function parseSheetsDeterministically(tables: ParsedSheetTable[]): ExtractedAsse
             quantity: qtyRaw > 1 ? Math.round(qtyRaw) : 1,
             sourceSheet: table.name,
             sourceRow: r + 1,
-            isSummaryEntry: table.isSummarySheet,
-            confidence: table.isSummarySheet ? 74 : 85,
-            aiReason: table.isSummarySheet
-              ? `Identificado na aba resumida "${table.name}" (linha ${r + 1}). Confirme se deseja cadastrar este grupo/bem.`
-              : `Extraído da aba "${table.name}" (linha ${r + 1}).`,
+            isSummaryEntry: table.role === 'summary',
+            confidence: table.role === 'summary' ? 76 : 88,
+            aiReason:
+              table.role === 'summary'
+                ? `Identificado na aba resumida "${table.name}" (linha ${r + 1}). Confirme se deseja cadastrar este grupo/bem.`
+                : `Extraído da aba "${table.name}" (linha ${r + 1}).`,
           },
-          candidates.length
+          candidates.length + found.length
         )
       );
+    }
+
+    return found;
+  };
+
+  // 1. Prefer dedicated inventory & general asset sheets
+  for (const t of [...inventoryTables, ...otherTables]) {
+    candidates.push(...extractFromTable(t));
+  }
+
+  // 2. If no inventory/other sheets yielded assets, read summary sheets ("abas resumidas")
+  if (candidates.length === 0) {
+    for (const t of summaryTables) {
+      candidates.push(...extractFromTable(t));
     }
   }
 
@@ -499,15 +588,67 @@ const ASSET_EXTRACTION_SCHEMA = {
 };
 
 const ASSET_EXTRACTION_PROMPT = `Você é um auditor contábil especialista em Ativo Imobilizado (CPC 27 / IFRS / RFB Brasil).
-Analise o conteúdo completo enviado (todas as abas da planilha, ou documento PDF/imagem/XML) para identificar TODOS os bens candidatos a cadastro no módulo de Ativo Imobilizado.
+Analise o conteúdo enviado para identificar TODOS os bens reais candidatos a cadastro no módulo de Ativo Imobilizado.
 
-REGRAS CRÍTICAS PARA PLANILHAS COM ABAS RESUMIDAS ("Resumo", "Sintético", "Consolidado", "Totais"):
-1. Inspecione TODAS as abas fornecidas, sem ignorar nenhuma aba curta ou resumida.
-2. Se houver uma aba analítica (item por item) E uma aba resumida que apenas totaliza exatamente os mesmos itens: priorize os itens detalhados e NÃO duplique o "TOTAL GERAL".
-3. Porém, se uma aba resumida/sintética contiver grupos de ativos ou valores consolidados QUE NÃO estão detalhados item a item em outra aba (ou se a planilha inteira possuir apenas abas resumidas, ex: "Veículos - 3 unid - R$ 180.000", "Máquinas Industriais - R$ 95.000", "Computadores TI - R$ 24.500"): EXTRAIA CADA LINHA/GRUPO DE ATIVO DA ABA RESUMIDA como um item candidato, marcando isSummaryEntry=true e informando sourceSheet com o nome exato da aba! O usuário vai revisar item por item ("um a um") e decidir se cadastra ou pula.
-4. Nunca descarte uma linha válida só porque falta plaqueta ou data exata — gere uma sugestão contábil coerente (ex: taxa CPC 27 padrão da categoria e data fallback do período mencionado no cabeçalho ou data atual).
-5. Ignore exclusivamente cabeçalhos de tabela e linhas puramente de "TOTAL GERAL" / "SOMA".
-6. Para NF-e / faturas / relatórios PDF, extraia cada equipamento, veículo, móvel ou computador relevante separadamente para revisão um a um.`;
+REGRAS CRÍTICAS PARA PLANILHAS DE CONTROLE DE ATIVO:
+1. Foque nas abas de inventário/bens (ex: "Relatorio_Bens", "Bens", "Ativo", "Inventário") ou em abas resumidas de bens ("Resumo", "Sintético", "Consolidado").
+2. NÃO extraia linhas de abas auxiliares de parâmetros/regras (ex: "Premissas", "Taxas", "Tabela"), nem lançamentos contábeis de débito/crédito mensal (ex: "Resumo_Lancamentos", "Diário") quando já houver uma aba de bens.
+3. NÃO extraia cards/legendas/totais do cabeçalho da planilha (ex: "Em depreciação: 1", "Totalmente depreciado: 0", "TOTAL GERAL", "SUBTOTAL").
+4. Porém, se a planilha possuir APENAS abas resumidas/sintéticas sem uma aba analítica detalhando aqueles bens (ex: "Veículos - 3 unid - R$ 180.000", "Computadores TI - R$ 24.500"): EXTRAIA cada linha/grupo de ativo da aba resumida com isSummaryEntry=true e sourceSheet igual ao nome da aba!
+5. Cada bem extraído será revisado um a um pelo contador, que escolherá se cadastra ou não.
+6. Para NF-e / PDFs / imagens, extraia cada equipamento, veículo, móvel ou computador relevante separadamente.`;
+
+function formatFriendlyAiWarning(err: any): string {
+  const raw = String(err?.message || err || '');
+  const lower = raw.toLowerCase();
+  if (
+    err?.status === 503 ||
+    lower.includes('503') ||
+    lower.includes('unavailable') ||
+    lower.includes('high demand') ||
+    lower.includes('overloaded')
+  ) {
+    return 'O modelo de IA está temporariamente com pico de demanda. Aplicamos a leitura estruturada multi-abas automaticamente para você revisar um a um.';
+  }
+  if (err?.status === 429 || lower.includes('429') || lower.includes('quota') || lower.includes('resource_exhausted')) {
+    return 'Cota temporária da IA atingida; leitura estruturada multi-abas aplicada automaticamente.';
+  }
+  if (lower.includes('api_key') || lower.includes('permission_denied') || lower.includes('não configurada')) {
+    return 'Chave de IA indisponível no momento; leitura estruturada multi-abas aplicada automaticamente.';
+  }
+  return 'Leitura estruturada inteligente aplicada automaticamente nas abas da planilha.';
+}
+
+function isRetryableGeminiError(err: any): boolean {
+  const status = Number(err?.status || err?.code || 0);
+  const msg = String(err?.message || err || '').toLowerCase();
+  return (
+    status === 404 ||
+    status === 429 ||
+    status === 500 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+    msg.includes('503') ||
+    msg.includes('429') ||
+    msg.includes('unavailable') ||
+    msg.includes('high demand') ||
+    msg.includes('overloaded') ||
+    msg.includes('resource_exhausted') ||
+    msg.includes('not found') ||
+    msg.includes('timeout')
+  );
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    promise.finally(() => clearTimeout(timer)),
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Timeout após ${ms}ms (${label})`)), ms);
+    }),
+  ]);
+}
 
 async function callGeminiAssetExtractor(
   parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }>
@@ -518,12 +659,15 @@ async function callGeminiAssetExtractor(
   }
 
   const attempts = [
-    { model: 'gemini-3.1-flash-lite', thinkingLevel: ThinkingLevel.MINIMAL },
-    { model: 'gemini-4-hydrogen', thinkingLevel: undefined },
+    { model: 'gemini-3.1-flash-lite', thinkingLevel: ThinkingLevel.MINIMAL, delayMs: 0, timeoutMs: 12000 },
+    { model: 'gemini-4-hydrogen', thinkingLevel: undefined, delayMs: 400, timeoutMs: 15000 },
   ];
 
   let lastErr: any;
   for (const attempt of attempts) {
+    if (attempt.delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, attempt.delayMs));
+    }
     try {
       const config: Record<string, any> = {
         responseMimeType: 'application/json',
@@ -533,11 +677,15 @@ async function callGeminiAssetExtractor(
         config.thinkingConfig = { thinkingLevel: attempt.thinkingLevel };
       }
 
-      const response = await ai.models.generateContent({
-        model: attempt.model,
-        contents: { parts },
-        config,
-      });
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model: attempt.model,
+          contents: { parts },
+          config,
+        }),
+        attempt.timeoutMs,
+        attempt.model
+      );
 
       const rawText = (response.text || '{}').replace(/```json|```/g, '').trim();
       const parsed = JSON.parse(rawText);
@@ -547,8 +695,7 @@ async function callGeminiAssetExtractor(
       };
     } catch (err: any) {
       lastErr = err;
-      const msg = String(err?.message || '');
-      if (err?.status === 404 || msg.includes('not found') || err?.status === 429) {
+      if (isRetryableGeminiError(err)) {
         continue;
       }
       throw err;
@@ -606,19 +753,26 @@ export async function analyzeAssetFileWithAI(params: {
       };
     }
 
-    const combinedText = tables.map((t) => t.textDump).join('\n\n').slice(0, 65000);
+    // Prioritize inventory & summary tabs in AI prompt; exclude pure parameter tabs if inventory tabs exist
+    const hasInventoryTab = tables.some((t) => t.role === 'inventory' || t.role === 'summary');
+    const promptTables = hasInventoryTab
+      ? tables.filter((t) => t.role !== 'parameter' && t.role !== 'journal')
+      : tables;
+    const effectivePromptTables = promptTables.length > 0 ? promptTables : tables;
+
+    const combinedText = effectivePromptTables.map((t) => t.textDump).join('\n\n').slice(0, 65000);
     const deterministicFallback = parseSheetsDeterministically(tables);
 
     try {
       const aiRes = await callGeminiAssetExtractor([
         {
-          text: `${ASSET_EXTRACTION_PROMPT}\n\nARQUIVO: ${cleanName}\nTOTAL DE ABAS COM DADOS: ${tables.length}\n\n${combinedText}`,
+          text: `${ASSET_EXTRACTION_PROMPT}\n\nARQUIVO: ${cleanName}\nABAS ANALISADAS: ${effectivePromptTables.map((t) => t.name).join(', ')}\n\n${combinedText}`,
         },
       ]);
 
       const normalizedAi = (aiRes.assets || [])
         .map((item, idx) => buildNormalizedCandidate(item, idx))
-        .filter((c) => c.description && (c.acquisitionValue > 0 || (c.notes || '').length > 0));
+        .filter((c) => !isTotalOrHeaderNoiseRow(c.description) && c.acquisitionValue > 0);
 
       const finalCandidates = normalizedAi.length > 0 ? normalizedAi : deterministicFallback;
 
@@ -631,14 +785,9 @@ export async function analyzeAssetFileWithAI(params: {
         usedFallback: normalizedAi.length === 0 && deterministicFallback.length > 0,
         summaryText:
           aiRes.summaryText ||
-          `Foram analisadas ${tables.length} aba(s) e identificados ${finalCandidates.length} bem(ns)/grupo(s) para revisão um a um.`,
+          `Foram analisadas ${tables.length} aba(s) e identificados ${finalCandidates.length} bem(ns) para revisão um a um.`,
       };
     } catch (err: any) {
-      const warnMsg =
-        err?.status === 429
-          ? 'Cota temporária da IA atingida; leitura estruturada multi-abas aplicada automaticamente.'
-          : err?.message || 'IA indisponível no momento; leitura estruturada multi-abas aplicada.';
-
       return {
         fileName: cleanName,
         fileType: 'spreadsheet',
@@ -646,8 +795,8 @@ export async function analyzeAssetFileWithAI(params: {
         candidates: deterministicFallback,
         usedAi: false,
         usedFallback: true,
-        aiWarning: warnMsg,
-        summaryText: `Planilha lida (${tables.length} aba(s)) com extrator contábil: ${deterministicFallback.length} item(ns) localizado(s) para revisão um a um.`,
+        aiWarning: formatFriendlyAiWarning(err),
+        summaryText: `Planilha lida (${tables.length} aba(s)) com extrator contábil: ${deterministicFallback.length} bem(ns) localizado(s) para revisão um a um.`,
       };
     }
   }
@@ -681,7 +830,7 @@ export async function analyzeAssetFileWithAI(params: {
         candidates: fallbackXml,
         usedAi: false,
         usedFallback: true,
-        aiWarning: err?.message,
+        aiWarning: formatFriendlyAiWarning(err),
         summaryText: `${fallbackXml.length} item(ns) extraído(s) do XML para conferência um a um.`,
       };
     }
@@ -728,7 +877,7 @@ export async function analyzeAssetFileWithAI(params: {
         sheetsAnalyzed: [{ name: cleanName, rowCount: 0, isSummarySheet: false }],
         candidates: [],
         usedAi: false,
-        aiWarning: err?.message || 'Não foi possível extrair os bens deste documento via IA.',
+        aiWarning: formatFriendlyAiWarning(err),
         summaryText: 'Falha ao ler documento via IA. Você ainda pode cadastrar manualmente na revisão.',
       };
     }
@@ -757,7 +906,7 @@ export async function analyzeAssetFileWithAI(params: {
       sheetsAnalyzed: [{ name: cleanName, rowCount: 0, isSummarySheet: false }],
       candidates: [],
       usedAi: false,
-      aiWarning: err?.message,
+      aiWarning: formatFriendlyAiWarning(err),
       summaryText: 'Não foi possível identificar bens automaticamente neste arquivo.',
     };
   }

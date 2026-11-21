@@ -540,10 +540,27 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
                 <>
                   {/* Step-by-Step Progress Bar & Queue Navigator */}
                   <div className="space-y-2">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="font-bold text-slate-800 font-mono tabular-nums">
-                        Bem {currentIndex + 1} de {items.length}
-                      </span>
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="font-bold text-slate-800 font-mono tabular-nums shrink-0">
+                          Bem {currentIndex + 1} de {items.length}
+                        </span>
+                        {items.length > 5 && (
+                          <select
+                            value={currentIndex}
+                            onChange={(e) => setCurrentIndex(Number(e.target.value))}
+                            className="max-w-[200px] sm:max-w-[260px] px-2 py-1 rounded-lg border border-slate-200 bg-white text-[11px] font-medium text-slate-700 truncate cursor-pointer"
+                            aria-label="Ir para o bem"
+                          >
+                            {items.map((it, idx) => (
+                              <option key={it.tempId} value={idx}>
+                                #{idx + 1} {it.decision === 'registered' ? '✓ ' : it.decision === 'skipped' ? '— ' : ''}
+                                {it.description || `Item ${idx + 1}`}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
                       <div className="flex items-center gap-1.5">
                         <button
                           type="button"
