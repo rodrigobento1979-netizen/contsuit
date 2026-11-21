@@ -102,6 +102,8 @@ export const ChartOfAccountsView: React.FC<ChartOfAccountsViewProps> = ({
   const [importText, setImportText] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [confirmPreset, setConfirmPreset] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const accountReportColumns: ReportColumn[] = [
     { key: 'code', label: 'Código da Conta', align: 'left' },
@@ -227,7 +229,7 @@ export const ChartOfAccountsView: React.FC<ChartOfAccountsViewProps> = ({
 
   // Handle Load Standard Preset
   const handleLoadStandardPreset = async () => {
-    if (!confirm('Deseja carregar o Plano de Contas Padrão Brasileiro (SPED/NBC TG) para esta empresa?')) return;
+    setConfirmPreset(false);
     setIsSubmitting(true);
     try {
       const formatted = STANDARD_CHART_PRESET.map(acc => ({
@@ -343,12 +345,12 @@ export const ChartOfAccountsView: React.FC<ChartOfAccountsViewProps> = ({
   };
 
   // Handle Delete Account
-  const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Tem certeza que deseja excluir a conta contábil "${name}"?`)) return;
+  const handleDelete = async (id: string) => {
     try {
       const res = await fetch(`/api/accounts/${id}`, { method: 'DELETE' });
       if (res.ok) {
         setAccounts(prev => prev.filter(a => a.id !== id));
+        setConfirmDeleteId(null);
         setMessage({ type: 'success', text: 'Conta excluída com sucesso.' });
       }
     } catch {
@@ -371,6 +373,7 @@ export const ChartOfAccountsView: React.FC<ChartOfAccountsViewProps> = ({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   return (
@@ -501,15 +504,36 @@ export const ChartOfAccountsView: React.FC<ChartOfAccountsViewProps> = ({
 
           {/* Action Buttons */}
           <div className="flex items-center gap-2">
-            <button
-              onClick={handleLoadStandardPreset}
-              disabled={isSubmitting}
-              className="px-3 py-1.5 bg-teal-50 text-teal-800 hover:bg-teal-100 border border-teal-200 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
-              title="Carregar plano padrão de contas contábeis brasileiro"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-teal-700" />
-              <span>Plano Padrão (SPED)</span>
-            </button>
+            {confirmPreset ? (
+              <div className="flex items-center gap-1.5 bg-teal-50 border border-teal-300 rounded-lg px-2 py-1 text-xs">
+                <span className="font-bold text-teal-900 text-[11px]">Carregar SPED?</span>
+                <button
+                  type="button"
+                  onClick={handleLoadStandardPreset}
+                  disabled={isSubmitting}
+                  className="px-2 py-0.5 rounded bg-teal-600 hover:bg-teal-700 text-white font-bold text-[11px] cursor-pointer"
+                >
+                  Sim
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmPreset(false)}
+                  className="px-2 py-0.5 rounded bg-white border border-slate-200 text-slate-600 hover:bg-slate-100 font-semibold text-[11px] cursor-pointer"
+                >
+                  Não
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmPreset(true)}
+                disabled={isSubmitting}
+                className="px-3 py-1.5 bg-teal-50 text-teal-800 hover:bg-teal-100 border border-teal-200 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                title="Carregar plano padrão de contas contábeis brasileiro"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-teal-700" />
+                <span>Plano Padrão (SPED)</span>
+              </button>
+            )}
 
             <button
               onClick={() => setShowImportModal(true)}
@@ -682,13 +706,33 @@ export const ChartOfAccountsView: React.FC<ChartOfAccountsViewProps> = ({
 
                       {/* Actions */}
                       <td className="py-2 px-3 text-right whitespace-nowrap">
-                        <button
-                          onClick={() => handleDelete(account.id, account.name)}
-                          className="p-1 text-slate-400 hover:text-rose-600 transition cursor-pointer"
-                          title="Excluir conta contábil"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {confirmDeleteId === account.id ? (
+                          <div className="inline-flex items-center gap-1 bg-rose-50 border border-rose-200 rounded-lg px-1.5 py-0.5">
+                            <span className="text-[10px] font-bold text-rose-800">Excluir?</span>
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(account.id)}
+                              className="px-1.5 py-0.5 rounded bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold cursor-pointer"
+                            >
+                              Sim
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteId(null)}
+                              className="px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-600 text-[10px] font-semibold cursor-pointer"
+                            >
+                              Não
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setConfirmDeleteId(account.id)}
+                            className="p-1 text-slate-400 hover:text-rose-600 transition cursor-pointer"
+                            title="Excluir conta contábil"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );

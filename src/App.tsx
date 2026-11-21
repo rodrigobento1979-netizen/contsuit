@@ -164,7 +164,7 @@ export default function App() {
   const [firebaseUser, setFirebaseUser] = useState<any>(null);
 
   // Period for depreciation
-  const [selectedMonth, setSelectedMonth] = useState<string>('2026-11');
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => new Date().toISOString().slice(0, 7));
 
   // Modals
   const [isAssetModalOpen, setIsAssetModalOpen] = useState(false);
@@ -1049,6 +1049,102 @@ export default function App() {
     }
   };
 
+  const handleSaveAssetsBatch = async (assetsData: Partial<Asset>[]) => {
+    if (!Array.isArray(assetsData) || assetsData.length === 0) return;
+    const targetCompanyId = currentCompany.id;
+    const prepared = assetsData.map((a) => ({
+      ...a,
+      companyId: a.companyId || targetCompanyId,
+    }));
+
+    const res = await fetch('/api/assets/bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ companyId: targetCompanyId, assets: prepared }),
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.error || 'Falha ao cadastrar bens em lote');
+    }
+    const data = await res.json();
+    const createdAssets: Asset[] = Array.isArray(data?.assets) ? data.assets : [];
+
+    // Sync created assets to Firestore in concurrent chunks of 10
+    for (let i = 0; i < createdAssets.length; i += 10) {
+      const chunk = createdAssets.slice(i, i + 10);
+      await Promise.allSettled(
+        chunk.map((item) => saveAssetToFirestore(item.companyId || targetCompanyId, item))
+      );
+    }
+
+    await fetchAssets();
+    await fetchDepreciation();
+    showToast(`${createdAssets.length} bem(ns) cadastrado(s) em lote com sucesso!`);
+  };
+
+  const handleDeleteAssetsBatch = async (ids: string[]) => {
+    const cleanIds = Array.from(new Set((ids || []).filter(Boolean)));
+    if (cleanIds.length === 0) return;
+    const idSet = new Set(cleanIds);
+
+    const affectedCompanies = new Set<string>();
+    assets.forEach((a) => {
+      if (idSet.has(a.id) && a.companyId) {
+        affectedCompanies.add(a.companyId);
+      }
+    });
+    if (currentCompany.id) {
+      affectedCompanies.add(currentCompany.id);
+    }
+
+    // 1. Optimistic local removal + tombstones per company
+    setAssets((prev) => prev.filter((a) => !idSet.has(a.id)));
+    affectedCompanies.forEach((compId) => {
+      try {
+        const cacheKey = `contsuite_cached_assets_${compId}`;
+        const raw = localStorage.getItem(cacheKey);
+        if (raw) {
+          const next = (JSON.parse(raw) as Asset[]).filter((a) => !idSet.has(a.id));
+          localStorage.setItem(cacheKey, JSON.stringify(next));
+        }
+        const delKey = `contsuite_deleted_assets_${compId}`;
+        const rawDel = localStorage.getItem(delKey);
+        const delArr: string[] = rawDel ? JSON.parse(rawDel) : [];
+        const mergedDel = Array.from(new Set([...cleanIds, ...delArr])).slice(0, 1000);
+        localStorage.setItem(delKey, JSON.stringify(mergedDel));
+      } catch {}
+    });
+
+    try {
+      const res = await fetch('/api/assets/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: cleanIds }),
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || 'Falha ao excluir bens em lote no servidor');
+      }
+
+      // 2. Delete from Firestore across affected companies in parallel chunks
+      for (const compId of affectedCompanies) {
+        for (let i = 0; i < cleanIds.length; i += 10) {
+          const chunk = cleanIds.slice(i, i + 10);
+          await Promise.allSettled(
+            chunk.map((assetId) => deleteAssetFromFirestore(compId, assetId))
+          );
+        }
+      }
+
+      showToast(`${cleanIds.length} bem(ns) excluído(s) definitivamente do inventário e do Firebase.`);
+      await fetchAssets();
+      await fetchDepreciation();
+    } catch (err: any) {
+      showToast(err.message || 'Erro ao excluir bens em lote', 'error');
+      await fetchAssets();
+    }
+  };
+
   const handleUpdateAssetStatus = async (id: string, status: Asset['status'], notes?: string) => {
     try {
       const res = await fetch(`/api/assets/${id}`, {
@@ -1057,6 +1153,12 @@ export default function App() {
         body: JSON.stringify({ status, notes }),
       });
       if (!res.ok) throw new Error('Falha ao alterar status');
+      const updated = (await res.json()) as Asset;
+      try {
+        await saveAssetToFirestore(updated.companyId || currentCompany.id, updated);
+      } catch (e) {
+        console.warn('Firestore update asset status warning:', e);
+      }
       showToast(`Status do bem alterado para: ${status}`);
       await fetchAssets();
       await fetchDepreciation();
@@ -1447,7 +1549,15 @@ export default function App() {
                     setIsAssetModalOpen(true);
                   }}
                   onDeleteAsset={handleDeleteAsset}
+                  onDeleteAssetsBatch={handleDeleteAssetsBatch}
                   onUpdateAssetStatus={handleUpdateAssetStatus}
+                  onAssetUpdated={async (updatedAsset) => {
+                    try {
+                      await saveAssetToFirestore(updatedAsset.companyId || currentCompany.id, updatedAsset);
+                    } catch (e) {
+                      console.warn('Firestore disposal sync warning:', e);
+                    }
+                  }}
                   onRefreshAssets={fetchAssets}
                 />
               )}
@@ -1494,6 +1604,7 @@ export default function App() {
               {/* 6. Controle Financeiro de Honorários Contábeis */}
               {activeTab === 'fees' && (
                 <HonorariosView
+                  currentUser={currentUser}
                   currentCompany={currentCompany}
                   allCompanies={allCompanies}
                   showToast={showToast}
@@ -1555,6 +1666,7 @@ export default function App() {
         onClose={() => setIsAssetSmartImportOpen(false)}
         currentCompany={currentCompany}
         onSaveAsset={handleSaveAsset}
+        onSaveAssetsBatch={handleSaveAssetsBatch}
         showToast={showToast}
       />
 

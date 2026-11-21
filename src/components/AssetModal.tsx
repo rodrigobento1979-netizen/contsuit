@@ -58,6 +58,10 @@ export const AssetModal: React.FC<AssetModalProps> = ({
   const [debitAccount, setDebitAccount] = useState('3.1.2.04.0010');
   const [creditAccount, setCreditAccount] = useState('1.2.3.09.0001');
   const [assetAccount, setAssetAccount] = useState('1.2.3.01.0001');
+  const [initialAccumulatedDepreciation, setInitialAccumulatedDepreciation] = useState<number>(0);
+  const [initialAccumulatedDepreciationDate, setInitialAccumulatedDepreciationDate] = useState<string>('');
+  const [assetGroup, setAssetGroup] = useState<string>('');
+  const [status, setStatus] = useState<'ativo' | 'baixado' | 'totalmente_depreciado' | 'em_manutencao'>('ativo');
   const [notes, setNotes] = useState('');
 
   // AI state
@@ -85,6 +89,10 @@ export const AssetModal: React.FC<AssetModalProps> = ({
       setDebitAccount(assetToEdit.debitAccount || company.chartOfAccounts?.depreciationExpenseAccount || '3.1.2.04.0010');
       setCreditAccount(assetToEdit.creditAccount || company.chartOfAccounts?.accumulatedDepreciationAccount || '1.2.3.09.0001');
       setAssetAccount(assetToEdit.assetAccount || company.chartOfAccounts?.assetDefaultAccount || '1.2.3.01.0001');
+      setInitialAccumulatedDepreciation(assetToEdit.initialAccumulatedDepreciation || 0);
+      setInitialAccumulatedDepreciationDate(assetToEdit.initialAccumulatedDepreciationDate || '');
+      setAssetGroup(assetToEdit.assetGroup || '');
+      setStatus(assetToEdit.status || 'ativo');
       setNotes(assetToEdit.notes || '');
       setAiJustification(null);
     } else {
@@ -107,6 +115,10 @@ export const AssetModal: React.FC<AssetModalProps> = ({
       setDebitAccount(company.chartOfAccounts?.depreciationExpenseAccount || '3.1.2.04.0010');
       setCreditAccount(company.chartOfAccounts?.accumulatedDepreciationAccount || '1.2.3.09.0001');
       setAssetAccount(company.chartOfAccounts?.assetDefaultAccount || '1.2.3.01.0001');
+      setInitialAccumulatedDepreciation(0);
+      setInitialAccumulatedDepreciationDate('');
+      setAssetGroup('');
+      setStatus('ativo');
       setNotes('');
       setAiJustification(null);
     }
@@ -201,6 +213,13 @@ export const AssetModal: React.FC<AssetModalProps> = ({
         debitAccount,
         creditAccount,
         assetAccount,
+        initialAccumulatedDepreciation: Number(initialAccumulatedDepreciation || 0),
+        initialAccumulatedDepreciationDate:
+          Number(initialAccumulatedDepreciation || 0) > 0
+            ? initialAccumulatedDepreciationDate || depreciationStartDate
+            : undefined,
+        assetGroup: assetGroup.trim() || undefined,
+        status,
         notes,
       });
       onClose();
@@ -517,6 +536,65 @@ export const AssetModal: React.FC<AssetModalProps> = ({
                 <div className="text-[10px] text-slate-400">
                   Base Depreciável: R$ {depreciableValueCalc.toFixed(2)} ({monthlyRatePercent}% a.m.)
                 </div>
+              </div>
+            </div>
+
+            {/* Accumulated Depreciation Balance Brought Forward */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 p-3 rounded-xl bg-amber-50/60 border border-amber-200">
+              <div>
+                <label className="block text-xs font-semibold text-amber-950 mb-1">
+                  Deprec. Acumulada Inicial (R$)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder="0,00"
+                  value={initialAccumulatedDepreciation || ''}
+                  onChange={(e) => setInitialAccumulatedDepreciation(parseFloat(e.target.value) || 0)}
+                  className="w-full text-xs sm:text-sm font-mono font-bold p-2 rounded-lg border border-amber-300 bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-amber-950 mb-1">
+                  Data Corte Dep. Acumulada
+                </label>
+                <input
+                  type="date"
+                  value={initialAccumulatedDepreciationDate}
+                  onChange={(e) => setInitialAccumulatedDepreciationDate(e.target.value)}
+                  className="w-full text-xs sm:text-sm p-2 rounded-lg border border-amber-300 bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-amber-950 mb-1">
+                  Grupo na Planilha
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ex: Máquinas e Equip."
+                  value={assetGroup}
+                  onChange={(e) => setAssetGroup(e.target.value)}
+                  className="w-full text-xs sm:text-sm p-2 rounded-lg border border-amber-300 bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-amber-950 mb-1">
+                  Situação Contábil
+                </label>
+                <select
+                  value={status}
+                  onChange={(e) => setStatus(e.target.value as any)}
+                  className="w-full text-xs sm:text-sm p-2 rounded-lg border border-amber-300 bg-white font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500"
+                >
+                  <option value="ativo">Ativo (Em depreciação)</option>
+                  <option value="totalmente_depreciado">Totalmente Depreciado</option>
+                  <option value="baixado">Baixado / Alienado</option>
+                  <option value="em_manutencao">Em Manutenção</option>
+                </select>
               </div>
             </div>
           </div>

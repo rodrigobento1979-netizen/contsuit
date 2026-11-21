@@ -49,9 +49,69 @@ interface AssetsViewProps {
   onOpenSmartImport: () => void;
   onEditAsset: (asset: Asset) => void;
   onDeleteAsset: (id: string) => Promise<void>;
+  onDeleteAssetsBatch?: (ids: string[]) => Promise<void>;
   onUpdateAssetStatus: (id: string, status: Asset['status'], notes?: string) => Promise<void>;
+  onAssetUpdated?: (asset: Asset) => Promise<void> | void;
   onRefreshAssets?: () => void;
   initialSubTab?: 'inventario' | 'depreciacao' | 'relatorio_estatistica' | 'baixas' | 'integracao';
+}
+
+const GENERIC_STATUS_DESCRIPTION_RE =
+  /^(em deprecia[cç][aã]o|totalmente depreciad[oa]s?|depreciad[oa]s?|baixad[oa]s?|alienad[oa]s?|ativ[oa]s?|inativ[oa]s?|em uso|em manuten[cç][aã]o|sim|n[aã]o|total|total geral|subtotal)$/i;
+
+export function auditAssetInconsistencies(asset: Asset, tagCounts: Map<string, number>): string[] {
+  const issues: string[] = [];
+  const desc = String(asset.description || '').trim();
+  const tag = String(asset.tagNumber || '').trim();
+  const acqVal = Number(asset.acquisitionValue || 0);
+  const resVal = Number(asset.residualValue || 0);
+  const rate = Number(asset.annualRate || 0);
+  const life = Number(asset.usefulLifeMonths || 0);
+  const initDep = asset.initialAccumulatedDepreciation;
+  const depreciable = Math.max(0, acqVal - resVal);
+
+  if (desc.length < 3 || GENERIC_STATUS_DESCRIPTION_RE.test(desc)) {
+    issues.push('Descrição genérica de status/título em vez do nome do bem');
+  }
+  if (!Number.isFinite(acqVal) || acqVal <= 10) {
+    issues.push(`Valor de aquisição inválido ou simbólico (R$ ${acqVal.toFixed(2)})`);
+  }
+  if (acqVal > 0 && resVal >= acqVal) {
+    issues.push('Valor residual maior ou igual ao valor de aquisição');
+  }
+  if (!Number.isFinite(rate) || rate <= 0 || rate > 100) {
+    issues.push(`Taxa anual fora da faixa contábil (${rate}%)`);
+  }
+  if (!Number.isFinite(life) || life <= 0) {
+    issues.push('Vida útil em meses inválida');
+  }
+
+  const acqDate = String(asset.acquisitionDate || '').slice(0, 10);
+  const depStart = String(asset.depreciationStartDate || acqDate).slice(0, 10);
+  const todayIso = new Date().toISOString().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(acqDate)) {
+    issues.push('Data de aquisição inválida');
+  } else if (acqDate > todayIso) {
+    issues.push(`Data de aquisição no futuro (${acqDate.split('-').reverse().join('/')})`);
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(acqDate) && /^\d{4}-\d{2}-\d{2}$/.test(depStart) && depStart < acqDate) {
+    issues.push('Início da depreciação anterior à data de aquisição');
+  }
+
+  if (initDep !== undefined && Number(initDep) > 0) {
+    if (Number(initDep) > depreciable + 0.01) {
+      issues.push('Depreciação acumulada inicial maior que o valor depreciável');
+    }
+    if (!asset.initialAccumulatedDepreciationDate) {
+      issues.push('Depreciação acumulada inicial sem data de corte');
+    }
+  }
+
+  if (tag && (tagCounts.get(tag.toLowerCase()) || 0) > 1) {
+    issues.push(`Plaqueta duplicada (${tag})`);
+  }
+
+  return issues;
 }
 
 export const AssetsView: React.FC<AssetsViewProps> = ({
@@ -61,7 +121,9 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
   onOpenSmartImport,
   onEditAsset,
   onDeleteAsset,
+  onDeleteAssetsBatch,
   onUpdateAssetStatus,
+  onAssetUpdated,
   onRefreshAssets,
   initialSubTab = 'inventario',
 }) => {
@@ -76,7 +138,7 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
 
   // Depreciation Calculation State
   const [periodType, setPeriodType] = useState<DepreciationPeriodType>('mensal');
-  const [selectedMonth, setSelectedMonth] = useState<string>('2026-11');
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => new Date().toISOString().slice(0, 7));
   const [depreciationSummary, setDepreciationSummary] = useState<DepreciationSummary | null>(null);
   const [loadingDepreciation, setLoadingDepreciation] = useState(false);
 
@@ -90,12 +152,15 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
   const [isSubmittingDisposal, setIsSubmittingDisposal] = useState(false);
   const [disposalResult, setDisposalResult] = useState<AssetDisposalCalculation | null>(null);
 
-  // Feedback Toast & Delete Confirmation
+  // Feedback Toast, Batch Selection & Delete Confirmation
   const [actionMessage, setActionMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [copiedFormat, setCopiedFormat] = useState<string | null>(null);
   const [showReportModal, setShowReportModal] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deletingAssetId, setDeletingAssetId] = useState<string | null>(null);
+  const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
+  const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
+  const [isBatchDeleting, setIsBatchDeleting] = useState(false);
 
   const inventoryReportColumns: ReportColumn[] = [
     { key: 'tagNumber', label: 'Plaqueta', align: 'left' },
@@ -147,6 +212,33 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
     fetchDepreciation();
   }, [fetchDepreciation]);
 
+  // Inconsistency audit across inventory
+  const { issuesByAssetId, inconsistentAssetIds } = useMemo(() => {
+    const tagCounts = new Map<string, number>();
+    assets.forEach((a) => {
+      const t = String(a.tagNumber || '').trim().toLowerCase();
+      if (t && a.status !== 'baixado') {
+        tagCounts.set(t, (tagCounts.get(t) || 0) + 1);
+      }
+    });
+    const map = new Map<string, string[]>();
+    const badIds: string[] = [];
+    assets.forEach((a) => {
+      const issues = auditAssetInconsistencies(a, tagCounts);
+      if (issues.length > 0) {
+        map.set(a.id, issues);
+        badIds.push(a.id);
+      }
+    });
+    return { issuesByAssetId: map, inconsistentAssetIds: badIds };
+  }, [assets]);
+
+  // Keep selectedAssetIds pruned to existing assets
+  useEffect(() => {
+    const validIds = new Set(assets.map((a) => a.id));
+    setSelectedAssetIds((prev) => prev.filter((id) => validIds.has(id)));
+  }, [assets]);
+
   // Inventory filtering
   const filteredAssets = useMemo(() => {
     return assets.filter((asset) => {
@@ -157,11 +249,54 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
         (asset.costCenter || '').toLowerCase().includes(searchTerm.toLowerCase());
 
       const matchesCategory = selectedCategory === 'all' || asset.category === selectedCategory;
-      const matchesStatus = selectedStatus === 'all' || asset.status === selectedStatus;
+      const matchesStatus =
+        selectedStatus === 'all'
+          ? true
+          : selectedStatus === 'inconsistentes'
+            ? issuesByAssetId.has(asset.id)
+            : asset.status === selectedStatus;
 
       return matchesSearch && matchesCategory && matchesStatus;
     });
-  }, [assets, searchTerm, selectedCategory, selectedStatus]);
+  }, [assets, searchTerm, selectedCategory, selectedStatus, issuesByAssetId]);
+
+  const handleToggleSelectAllVisible = () => {
+    const visibleIds = filteredAssets.map((a) => a.id);
+    const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedAssetIds.includes(id));
+    if (allVisibleSelected) {
+      setSelectedAssetIds((prev) => prev.filter((id) => !visibleIds.includes(id)));
+    } else {
+      setSelectedAssetIds((prev) => Array.from(new Set([...prev, ...visibleIds])));
+    }
+    setConfirmBatchDelete(false);
+  };
+
+  const handleToggleAssetSelection = (id: string) => {
+    setSelectedAssetIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+    setConfirmBatchDelete(false);
+  };
+
+  const handleExecuteBatchDelete = async () => {
+    if (selectedAssetIds.length === 0 || isBatchDeleting) return;
+    setIsBatchDeleting(true);
+    try {
+      const toDelete = [...selectedAssetIds];
+      if (onDeleteAssetsBatch) {
+        await onDeleteAssetsBatch(toDelete);
+      } else {
+        for (const id of toDelete) {
+          await onDeleteAsset(id);
+        }
+      }
+      setSelectedAssetIds([]);
+      setConfirmBatchDelete(false);
+      showMsg(`${toDelete.length} bem(ns) excluído(s) definitivamente. Você já pode reimportar a planilha limpa.`);
+    } catch (err: any) {
+      showMsg(err?.message || 'Erro ao excluir bens selecionados.', 'error');
+    } finally {
+      setIsBatchDeleting(false);
+    }
+  };
 
   // Inventory statistics
   const activeCount = assets.filter(a => a.status === 'ativo').length;
@@ -173,17 +308,40 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
   const disposalPreview = useMemo(() => {
     if (!assetToDispose) return null;
     const price = parseFloat(disposalSalePrice.replace(',', '.')) || 0;
-    const [dispYear, dispMonth] = disposalDate.split('-').map(Number);
-    const startDate = new Date(assetToDispose.depreciationStartDate || assetToDispose.acquisitionDate);
-    const startYear = startDate.getFullYear();
-    const startMonth = startDate.getMonth() + 1;
+    const [dispYear, dispMonth] = disposalDate.slice(0, 10).split('-').map(Number);
+    const rawStartStr = (assetToDispose.depreciationStartDate || assetToDispose.acquisitionDate || '').slice(0, 10);
+    const startParts = rawStartStr.split('-').map(Number);
+    const startYear = startParts[0] || dispYear;
+    const startMonth = startParts[1] || dispMonth;
 
     const monthsElapsed = Math.max(0, (dispYear - startYear) * 12 + (dispMonth - startMonth) + 1);
     const depreciable = Math.max(0, assetToDispose.acquisitionValue - (assetToDispose.residualValue || 0));
     const monthlyRateDec = (assetToDispose.annualRate / 100) / 12;
     const standardMonthlyDeprec = depreciable * monthlyRateDec;
 
-    const accumulatedDeprec = Math.min(depreciable, monthsElapsed * standardMonthlyDeprec);
+    let accumulatedDeprec = 0;
+    if (
+      assetToDispose.status === 'totalmente_depreciado' &&
+      (assetToDispose.initialAccumulatedDepreciation ?? depreciable) >= depreciable - 0.01
+    ) {
+      accumulatedDeprec = depreciable;
+    } else if (
+      assetToDispose.initialAccumulatedDepreciation !== undefined &&
+      assetToDispose.initialAccumulatedDepreciation >= 0 &&
+      assetToDispose.initialAccumulatedDepreciationDate
+    ) {
+      const [cutY, cutM] = assetToDispose.initialAccumulatedDepreciationDate.slice(0, 10).split('-').map(Number);
+      const openingAccum = Math.min(depreciable, Math.max(0, Number(assetToDispose.initialAccumulatedDepreciation)));
+      const monthsAfterCutoff = (dispYear - cutY) * 12 + (dispMonth - cutM);
+      if (monthsAfterCutoff <= 0) {
+        accumulatedDeprec = openingAccum;
+      } else {
+        accumulatedDeprec = Math.min(depreciable, openingAccum + monthsAfterCutoff * standardMonthlyDeprec);
+      }
+    } else {
+      accumulatedDeprec = Math.min(depreciable, monthsElapsed * standardMonthlyDeprec);
+    }
+
     const vcl = Math.max(0, assetToDispose.acquisitionValue - accumulatedDeprec);
     const gainOrLoss = price - vcl;
 
@@ -218,6 +376,9 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
       if (res.ok) {
         setDisposalResult(data.calculation);
         showMsg(data.message || 'Baixa registrada com sucesso!');
+        if (data.asset && onAssetUpdated) {
+          await onAssetUpdated(data.asset);
+        }
         if (onRefreshAssets) onRefreshAssets();
         fetchDepreciation();
       } else {
@@ -449,14 +610,119 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
               <option value="ativo">Ativo</option>
               <option value="totalmente_depreciado">100% Depreciado</option>
               <option value="baixado">Baixado / Alienado</option>
+              {inconsistentAssetIds.length > 0 && (
+                <option value="inconsistentes">Com Inconsistências ({inconsistentAssetIds.length})</option>
+              )}
             </select>
           </div>
+
+          {/* Audit Alert Banner for previously inconsistent assets */}
+          {inconsistentAssetIds.length > 0 && (
+            <div className="bg-amber-50 border border-amber-300 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
+              <div className="flex items-start gap-2 text-amber-950">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold">
+                    Auditoria Contábil: {inconsistentAssetIds.length} bem(ns) com possível inconsistência cadastral/importação
+                  </p>
+                  <p className="text-[11px] text-amber-800 mt-0.5">
+                    Itens com descrição genérica, valor simbólico, plaqueta duplicada ou depreciação acumulada inconsistente. Selecione-os para excluir em lote antes de reimportar a planilha.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setSelectedStatus(selectedStatus === 'inconsistentes' ? 'all' : 'inconsistentes')}
+                  className="px-2.5 py-1.5 rounded-lg bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 font-bold text-[11px] transition cursor-pointer"
+                >
+                  {selectedStatus === 'inconsistentes' ? 'Mostrar Todos' : `Filtrar Inconsistentes (${inconsistentAssetIds.length})`}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedAssetIds(inconsistentAssetIds);
+                    setSelectedStatus('inconsistentes');
+                    setConfirmBatchDelete(false);
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] transition cursor-pointer"
+                >
+                  Selecionar Inconsistentes
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Batch Action Bar */}
+          {selectedAssetIds.length > 0 && (
+            <div className="bg-slate-900 text-white rounded-xl px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs shadow-sm">
+              <span className="font-semibold">
+                {selectedAssetIds.length} bem(ns) selecionado(s) no inventário
+              </span>
+              <div className="flex items-center gap-2">
+                {confirmBatchDelete ? (
+                  <>
+                    <span className="text-amber-300 font-bold text-[11px]">
+                      Excluir definitivamente do banco e Firebase?
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleExecuteBatchDelete}
+                      disabled={isBatchDeleting}
+                      className="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-[11px] transition cursor-pointer disabled:opacity-50 flex items-center gap-1"
+                    >
+                      {isBatchDeleting && <Loader2 className="w-3 h-3 animate-spin" />}
+                      Confirmar Exclusão ({selectedAssetIds.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmBatchDelete(false)}
+                      disabled={isBatchDeleting}
+                      className="px-2.5 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-100 font-semibold text-[11px] transition cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedAssetIds([]);
+                        setConfirmBatchDelete(false);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 font-semibold text-[11px] transition cursor-pointer"
+                    >
+                      Limpar Seleção
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmBatchDelete(true)}
+                      className="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-[11px] transition cursor-pointer flex items-center gap-1"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      Excluir Selecionados ({selectedAssetIds.length})
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Table */}
           <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
                 <tr className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200 text-[11px]">
+                  <th className="py-2.5 pl-3 pr-1 w-8 text-center">
+                    <input
+                      type="checkbox"
+                      aria-label="Selecionar todos os bens listados"
+                      checked={filteredAssets.length > 0 && filteredAssets.every((a) => selectedAssetIds.includes(a.id))}
+                      onChange={handleToggleSelectAllVisible}
+                      className="rounded border-slate-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+                    />
+                  </th>
                   <th className="py-2.5 px-3">Plaqueta / Bem</th>
                   <th className="py-2.5 px-2 hidden sm:table-cell">Categoria</th>
                   <th className="py-2.5 px-2">Aquisição</th>
@@ -469,24 +735,58 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
               <tbody className="divide-y divide-slate-100">
                 {filteredAssets.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-8 text-center text-slate-400">
+                    <td colSpan={8} className="py-8 text-center text-slate-400">
                       Nenhum bem patrimonial encontrado.
                     </td>
                   </tr>
                 ) : (
-                  filteredAssets.map((asset) => (
-                    <tr key={asset.id} className="hover:bg-slate-50/70 transition">
+                  filteredAssets.map((asset) => {
+                    const rowIssues = issuesByAssetId.get(asset.id) || [];
+                    const isSelected = selectedAssetIds.includes(asset.id);
+                    return (
+                    <tr key={asset.id} className={`hover:bg-slate-50/70 transition ${isSelected ? 'bg-teal-50/40' : rowIssues.length > 0 ? 'bg-amber-50/30' : ''}`}>
+                      <td className="py-2.5 pl-3 pr-1 text-center align-top">
+                        <input
+                          type="checkbox"
+                          aria-label={`Selecionar ${asset.description}`}
+                          checked={isSelected}
+                          onChange={() => handleToggleAssetSelection(asset.id)}
+                          className="mt-1 rounded border-slate-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+                        />
+                      </td>
                       <td className="py-2.5 px-3">
-                        <div className="font-bold text-slate-900 truncate max-w-[200px] sm:max-w-xs">
-                          {asset.description}
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-bold text-slate-900 truncate max-w-[200px] sm:max-w-xs">
+                            {asset.description}
+                          </span>
+                          {rowIssues.length > 0 && (
+                            <span
+                              title={rowIssues.join(' • ')}
+                              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px] font-bold shrink-0"
+                            >
+                              <AlertTriangle className="w-2.5 h-2.5 text-amber-600" />
+                              Revisar
+                            </span>
+                          )}
                         </div>
-                        <div className="text-[10px] text-teal-700 font-mono">
-                          Plaqueta: {asset.tagNumber}
+                        <div className="text-[10px] text-teal-700 font-mono flex flex-wrap items-center gap-x-2">
+                          <span>Plaqueta: {asset.tagNumber}</span>
+                          {asset.assetAccount && (
+                            <span className="text-slate-500">Cta: {asset.assetAccount}</span>
+                          )}
+                          {(asset.initialAccumulatedDepreciation || 0) > 0 && (
+                            <span className="text-amber-700 font-semibold">
+                              Dep. Acum. Imp.: {formatMoney(asset.initialAccumulatedDepreciation || 0)}
+                              {asset.initialAccumulatedDepreciationDate
+                                ? ` (${asset.initialAccumulatedDepreciationDate.split('-').reverse().join('/')})`
+                                : ''}
+                            </span>
+                          )}
                         </div>
                       </td>
 
                       <td className="py-2.5 px-2 hidden sm:table-cell text-slate-600 truncate max-w-[140px]">
-                        {asset.categoryLabel}
+                        {asset.assetGroup || asset.categoryLabel}
                       </td>
 
                       <td className="py-2.5 px-2 text-slate-600 whitespace-nowrap">
@@ -584,7 +884,7 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
                         </div>
                       </td>
                     </tr>
-                  ))
+                  );})
                 )}
               </tbody>
             </table>

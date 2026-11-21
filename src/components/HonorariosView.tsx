@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Coins, 
   PlusCircle, 
@@ -17,20 +17,28 @@ import {
   X,
   Printer
 } from 'lucide-react';
-import { FeeContract, Company } from '../types';
+import { FeeContract, Company, User } from '../types';
+import { filterCompaniesForUser, isMasterUser } from '../utils/auth';
 import { ReportPrintModal, ReportColumn } from './ReportPrintModal';
 
 interface HonorariosViewProps {
+  currentUser: User;
   currentCompany: Company;
   allCompanies: Company[];
   showToast: (text: string, type?: 'success' | 'error') => void;
 }
 
 export const HonorariosView: React.FC<HonorariosViewProps> = ({
+  currentUser,
   currentCompany,
   allCompanies,
   showToast,
 }) => {
+  const visibleCompanies = useMemo(
+    () => filterCompaniesForUser(allCompanies, currentUser),
+    [allCompanies, currentUser]
+  );
+
   const [fees, setFees] = useState<FeeContract[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<'all' | 'pago' | 'em_aberto' | 'atrasado'>('all');
@@ -42,7 +50,7 @@ export const HonorariosView: React.FC<HonorariosViewProps> = ({
   const [selectedContract, setSelectedContract] = useState<FeeContract | null>(null);
 
   // Form states for new contract
-  const [companyId, setCompanyId] = useState(allCompanies[0]?.id || '');
+  const [companyId, setCompanyId] = useState(currentCompany?.id || visibleCompanies[0]?.id || '');
   const [monthlyFee, setMonthlyFee] = useState<number>(2500);
   const [dueDay, setDueDay] = useState<number>(10);
   const [selectedServices, setSelectedServices] = useState<string[]>([
@@ -88,7 +96,15 @@ export const HonorariosView: React.FC<HonorariosViewProps> = ({
   const fetchFees = async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/fees');
+      const isMaster = isMasterUser(currentUser);
+      if (!isMaster && visibleCompanies.length === 0) {
+        setFees([]);
+        return;
+      }
+      const query = isMaster
+        ? ''
+        : `?allowedCompanyIds=${encodeURIComponent(visibleCompanies.map(c => c.id).join(','))}`;
+      const res = await fetch(`/api/fees${query}`);
       if (res.ok) {
         const data = await res.json();
         setFees(data);
@@ -102,7 +118,7 @@ export const HonorariosView: React.FC<HonorariosViewProps> = ({
 
   useEffect(() => {
     fetchFees();
-  }, []);
+  }, [currentUser.id, visibleCompanies.length]);
 
   const handleToggleService = (srv: string) => {
     if (selectedServices.includes(srv)) {
@@ -222,6 +238,7 @@ export const HonorariosView: React.FC<HonorariosViewProps> = ({
           <button
             onClick={() => {
               setSelectedContract(null);
+              setCompanyId(currentCompany?.id || visibleCompanies[0]?.id || '');
               setIsContractModalOpen(true);
             }}
             className="px-4 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs sm:text-sm font-bold shadow-sm transition flex items-center gap-2 cursor-pointer shrink-0"
@@ -467,7 +484,7 @@ export const HonorariosView: React.FC<HonorariosViewProps> = ({
                   className="w-full text-xs sm:text-sm p-2.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   required
                 >
-                  {allCompanies.map((c) => (
+                  {visibleCompanies.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.fantasyName || c.name} (CNPJ: {c.cnpj})
                     </option>

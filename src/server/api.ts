@@ -15,9 +15,11 @@ import {
   getDeletedAssetIds,
   getAssetById,
   createAsset,
+  createBulkAssets,
   updateAsset,
   upsertAsset,
   deleteAsset,
+  deleteBulkAssets,
   getStatements,
   getStatementById,
   saveStatement,
@@ -128,6 +130,15 @@ apiRouter.use((req: any, res: any, next: any) => {
     req.resume();
   }
 });
+
+function escapeHtml(val: unknown): string {
+  return String(val ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 // Helper to dynamically resolve the real origin/base URL of the app
 function getAppBaseUrl(req: Request): string {
@@ -298,16 +309,16 @@ apiRouter.post('/users/invite', async (req: Request, res: Response) => {
           </div>
 
           <div style="background-color: #ecfeff; border: 1px solid #a5f3fc; border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; font-size: 12px; color: #0e7490;">
-            <strong>✓ Cópia de Controle do Administrador:</strong> Enviada com sucesso para <code>${adminCopyEmail}</code> (Rodrigo Bento).
+            <strong>✓ Cópia de Controle do Administrador:</strong> Enviada com sucesso para <code>${escapeHtml(adminCopyEmail)}</code> (Rodrigo Bento).
           </div>
 
-          <p>Olá, <strong>${newUser.name}</strong>!</p>
-          <p>O Administrador <strong>Rodrigo Bento</strong> cadastrou o seu acesso corporativo exclusivo para a empresa <strong>${company?.name || 'sua empresa'}</strong>.</p>
+          <p>Olá, <strong>${escapeHtml(newUser.name)}</strong>!</p>
+          <p>O Administrador <strong>Rodrigo Bento</strong> cadastrou o seu acesso corporativo exclusivo para a empresa <strong>${escapeHtml(company?.name || 'sua empresa')}</strong>.</p>
           
           <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px; margin: 20px 0;">
             <p style="margin: 0 0 8px 0; font-weight: bold; color: #166534; font-size: 14px;">Suas Credenciais de Acesso Inicial:</p>
-            <p style="margin: 4px 0; font-size: 13px;"><strong>E-mail de Login:</strong> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px;">${newUser.email}</code></p>
-            <p style="margin: 4px 0; font-size: 13px;"><strong>Senha Padrão Provisória:</strong> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-weight: bold; color: #004d40;">${defaultPassword}</code></p>
+            <p style="margin: 4px 0; font-size: 13px;"><strong>E-mail de Login:</strong> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px;">${escapeHtml(newUser.email)}</code></p>
+            <p style="margin: 4px 0; font-size: 13px;"><strong>Senha Padrão Provisória:</strong> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-weight: bold; color: #004d40;">${escapeHtml(defaultPassword)}</code></p>
             <p style="margin: 8px 0 0 0; font-size: 11px; color: #15803d;">* Ao realizar o primeiro login, você poderá alterar esta senha para sua senha pessoal.</p>
           </div>
 
@@ -320,14 +331,14 @@ apiRouter.post('/users/invite', async (req: Request, res: Response) => {
           </ul>
 
           <div style="margin: 28px 0; text-align: center;">
-            <a href="${invitationLink}" style="background-color: #00897b; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; display: inline-block;">
+            <a href="${escapeHtml(invitationLink)}" style="background-color: #00897b; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; display: inline-block;">
               Acessar ContSuite com E-mail e Senha
             </a>
           </div>
 
           <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
           <p style="font-size: 11px; color: #94a3b8; text-align: center;">
-            ContSuite Contábil • Segurança e Isolamento de Dados por Empresa • Cópia CC: ${adminCopyEmail}
+            ContSuite Contábil • Segurança e Isolamento de Dados por Empresa • Cópia CC: ${escapeHtml(adminCopyEmail)}
           </p>
         </div>
       `,
@@ -494,27 +505,27 @@ apiRouter.post('/users/:id/resend-invite', async (req: Request, res: Response) =
           </div>
 
           <div style="background-color: #ecfeff; border: 1px solid #a5f3fc; border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; font-size: 12px; color: #0e7490;">
-            <strong>✓ Cópia de Controle do Administrador:</strong> Enviada com sucesso para <code>${adminCopyEmail}</code> (Rodrigo Bento).
+            <strong>✓ Cópia de Controle do Administrador:</strong> Enviada com sucesso para <code>${escapeHtml(adminCopyEmail)}</code> (Rodrigo Bento).
           </div>
 
-          <p>Olá, <strong>${user.name}</strong>!</p>
-          <p>O Administrador <strong>Rodrigo Bento</strong> reenviou suas credenciais de acesso corporativo exclusivo para a empresa <strong>${company?.name || 'sua empresa'}</strong>.</p>
+          <p>Olá, <strong>${escapeHtml(user.name)}</strong>!</p>
+          <p>O Administrador <strong>Rodrigo Bento</strong> reenviou suas credenciais de acesso corporativo exclusivo para a empresa <strong>${escapeHtml(company?.name || 'sua empresa')}</strong>.</p>
           
           <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px; margin: 20px 0;">
             <p style="margin: 0 0 8px 0; font-weight: bold; color: #166534; font-size: 14px;">Suas Credenciais de Acesso:</p>
-            <p style="margin: 4px 0; font-size: 13px;"><strong>E-mail de Login:</strong> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px;">${user.email}</code></p>
-            <p style="margin: 4px 0; font-size: 13px;"><strong>Senha Padrão Provisória:</strong> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-weight: bold; color: #004d40;">${defaultPassword}</code></p>
+            <p style="margin: 4px 0; font-size: 13px;"><strong>E-mail de Login:</strong> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px;">${escapeHtml(user.email)}</code></p>
+            <p style="margin: 4px 0; font-size: 13px;"><strong>Senha Padrão Provisória:</strong> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-weight: bold; color: #004d40;">${escapeHtml(defaultPassword)}</code></p>
           </div>
 
           <div style="margin: 28px 0; text-align: center;">
-            <a href="${invitationLink}" style="background-color: #00897b; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; display: inline-block;">
+            <a href="${escapeHtml(invitationLink)}" style="background-color: #00897b; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; display: inline-block;">
               Acessar ContSuite com E-mail e Senha
             </a>
           </div>
 
           <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
           <p style="font-size: 11px; color: #94a3b8; text-align: center;">
-            ContSuite Contábil • Segurança e Isolamento de Dados por Empresa • Cópia CC: ${adminCopyEmail}
+            ContSuite Contábil • Segurança e Isolamento de Dados por Empresa • Cópia CC: ${escapeHtml(adminCopyEmail)}
           </p>
         </div>
       `,
@@ -899,12 +910,23 @@ apiRouter.post('/assets', (req: Request, res: Response) => {
       debitAccount,
       creditAccount,
       assetAccount,
+      status,
+      initialAccumulatedDepreciation,
+      initialAccumulatedDepreciationDate,
+      assetGroup,
+      assetClass,
+      postToTrialBalance,
       notes,
     } = req.body;
 
     if (!companyId || !description || !acquisitionDate || acquisitionValue === undefined) {
       return res.status(400).json({ error: 'Empresa, descrição, data e valor de aquisição são obrigatórios.' });
     }
+
+    const validStatus =
+      status === 'baixado' || status === 'totalmente_depreciado' || status === 'em_manutencao'
+        ? status
+        : 'ativo';
 
     const newAsset = createAsset({
       companyId,
@@ -925,7 +947,15 @@ apiRouter.post('/assets', (req: Request, res: Response) => {
       debitAccount: debitAccount || '3.1.2.04.0010',
       creditAccount: creditAccount || '1.2.3.09.0001',
       assetAccount: assetAccount || '1.2.3.01.0001',
-      status: 'ativo',
+      status: validStatus,
+      initialAccumulatedDepreciation:
+        initialAccumulatedDepreciation !== undefined && initialAccumulatedDepreciation !== null
+          ? Number(initialAccumulatedDepreciation)
+          : undefined,
+      initialAccumulatedDepreciationDate: initialAccumulatedDepreciationDate || undefined,
+      assetGroup: assetGroup || undefined,
+      assetClass: assetClass || undefined,
+      postToTrialBalance: postToTrialBalance !== undefined ? Boolean(postToTrialBalance) : undefined,
       notes: notes || '',
     });
 
@@ -956,6 +986,79 @@ apiRouter.delete('/assets/:id', (req: Request, res: Response) => {
       success: true,
       removedFromServer: result.removed,
       tombstoned: result.tombstoned,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/assets/bulk', (req: Request, res: Response) => {
+  try {
+    const { companyId, assets: rawAssets } = req.body || {};
+    if (!Array.isArray(rawAssets) || rawAssets.length === 0) {
+      return res.status(400).json({ error: 'Informe uma lista de ativos para cadastro em lote.' });
+    }
+    const normalized = rawAssets
+      .filter((a: any) => a && (a.companyId || companyId) && a.description)
+      .map((a: any) => {
+        const acqDate = a.acquisitionDate || a.depreciationStartDate || new Date().toISOString().slice(0, 10);
+        const validStatus =
+          a.status === 'baixado' || a.status === 'totalmente_depreciado' || a.status === 'em_manutencao'
+            ? a.status
+            : 'ativo';
+        return {
+          companyId: a.companyId || companyId,
+          tagNumber: a.tagNumber || `PAT-${Math.floor(1000 + Math.random() * 9000)}`,
+          description: String(a.description).trim(),
+          category: a.category || 'outro',
+          categoryLabel: a.categoryLabel || 'Diversos',
+          acquisitionDate: acqDate,
+          depreciationStartDate: a.depreciationStartDate || acqDate,
+          acquisitionValue: Number(a.acquisitionValue || 0),
+          residualValue: Number(a.residualValue || 0),
+          annualRate: Number(a.annualRate || 10),
+          usefulLifeMonths: Number(a.usefulLifeMonths || 120),
+          costCenter: a.costCenter || 'Administrativo',
+          location: a.location || 'Sede Principal',
+          supplier: a.supplier || '',
+          invoiceNumber: a.invoiceNumber || '',
+          debitAccount: a.debitAccount || '3.1.2.04.0010',
+          creditAccount: a.creditAccount || '1.2.3.09.0001',
+          assetAccount: a.assetAccount || '1.2.3.01.0001',
+          status: validStatus,
+          initialAccumulatedDepreciation:
+            a.initialAccumulatedDepreciation !== undefined && a.initialAccumulatedDepreciation !== null
+              ? Number(a.initialAccumulatedDepreciation)
+              : undefined,
+          initialAccumulatedDepreciationDate: a.initialAccumulatedDepreciationDate || undefined,
+          assetGroup: a.assetGroup || undefined,
+          assetClass: a.assetClass || undefined,
+          postToTrialBalance: a.postToTrialBalance !== undefined ? Boolean(a.postToTrialBalance) : undefined,
+          notes: a.notes || '',
+        };
+      });
+
+    if (normalized.length === 0) {
+      return res.status(400).json({ error: 'Nenhum bem válido encontrado no lote enviado.' });
+    }
+    const created = createBulkAssets(normalized);
+    return res.json({ success: true, count: created.length, assets: created });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/assets/bulk-delete', (req: Request, res: Response) => {
+  try {
+    const { ids } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'Informe os IDs dos bens para exclusão em lote.' });
+    }
+    const result = deleteBulkAssets(ids);
+    return res.json({
+      success: true,
+      removedCount: result.removedCount,
+      tombstonedCount: result.tombstonedCount,
     });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -1021,9 +1124,9 @@ apiRouter.post('/assets/suggest-ai', async (req: Request, res: Response) => {
 // Calculation of depreciation with periodType ('mensal' | 'trimestral' | 'anual')
 apiRouter.get('/assets/depreciation', (req: Request, res: Response) => {
   try {
-    const { companyId, month, periodType } = req.query;
+    const { companyId, month, competenceMonth, periodType } = req.query;
     const assets = getAssets(companyId as string);
-    const competence = (month as string) || new Date().toISOString().slice(0, 7);
+    const competence = (month as string) || (competenceMonth as string) || new Date().toISOString().slice(0, 7);
     const pType = (periodType as DepreciationPeriodType) || 'mensal';
     const summary = calculateDepreciationForPeriod(assets, competence, pType);
     return res.json(summary);
@@ -1092,6 +1195,8 @@ apiRouter.post('/assets/:id/disposal', (req: Request, res: Response) => {
       status: 'baixado',
       disposalDate: date,
       disposalReason: reason,
+      salePrice: calculation.salePrice,
+      gainOrLoss: calculation.gainOrLoss,
       notes: notes ? `${asset.notes ? asset.notes + ' | ' : ''}Baixa: ${notes}` : asset.notes,
     });
 
@@ -1273,11 +1378,11 @@ apiRouter.post('/ofx/finalize', async (req: Request, res: Response) => {
             <h2 style="color: #004d40; margin-top: 0;">Novo Extrato Bancário Importado</h2>
             <p>Um novo extrato foi convertido e importado no ContSuite:</p>
             <ul>
-              <li><strong>Empresa:</strong> ${compObj?.fantasyName || compObj?.name || companyId} (CNPJ: ${compObj?.cnpj || '—'})</li>
-              <li><strong>Banco:</strong> ${convertedRecord.bankName} (Ag: ${convertedRecord.agency} CC: ${convertedRecord.accountNumber})</li>
-              <li><strong>Período:</strong> ${convertedRecord.startDate} a ${convertedRecord.endDate}</li>
+              <li><strong>Empresa:</strong> ${escapeHtml(compObj?.fantasyName || compObj?.name || companyId)} (CNPJ: ${escapeHtml(compObj?.cnpj || '—')})</li>
+              <li><strong>Banco:</strong> ${escapeHtml(convertedRecord.bankName)} (Ag: ${escapeHtml(convertedRecord.agency)} CC: ${escapeHtml(convertedRecord.accountNumber)})</li>
+              <li><strong>Período:</strong> ${escapeHtml(convertedRecord.startDate)} a ${escapeHtml(convertedRecord.endDate)}</li>
               <li><strong>Lançamentos:</strong> ${convertedRecord.transactionsCount} transações processadas</li>
-              <li><strong>Arquivo:</strong> ${fileName || 'extrato_multipagina.pdf'}</li>
+              <li><strong>Arquivo:</strong> ${escapeHtml(fileName || 'extrato_multipagina.pdf')}</li>
             </ul>
             <p style="font-size: 11px; color: #64748b; margin-top: 20px;">Notificação automática enviada pelo ContSuite Contábil.</p>
           </div>
@@ -1369,8 +1474,15 @@ apiRouter.delete('/ofx/statements/:id', (req: Request, res: Response) => {
 // ---------------------------------------------------------
 apiRouter.get('/fees', (req: Request, res: Response) => {
   try {
-    const { companyId } = req.query;
-    const fees = getFees(companyId as string);
+    const { companyId, allowedCompanyIds } = req.query;
+    const allowedList =
+      typeof allowedCompanyIds === 'string'
+        ? allowedCompanyIds
+            .split(',')
+            .map(s => s.trim())
+            .filter(Boolean)
+        : undefined;
+    const fees = getFees(companyId as string, allowedList);
     return res.json(fees);
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -1811,13 +1923,13 @@ apiRouter.post('/documents', async (req: Request, res: Response) => {
           <h2 style="color: #004d40; margin-top: 0;">Novo Documento Postado</h2>
           <p>Um novo arquivo foi postado e classificado no módulo Arquivos:</p>
           <ul>
-            <li><strong>Empresa:</strong> ${compObj?.fantasyName || compObj?.name || companyId} (CNPJ: ${compObj?.cnpj || '—'})</li>
-            <li><strong>Arquivo:</strong> ${created.fileName}</li>
-            <li><strong>Categoria:</strong> ${created.category.toUpperCase()}</li>
-            <li><strong>Competência:</strong> ${created.competenceMonth}</li>
-            <li><strong>Status:</strong> ${created.status.toUpperCase()}</li>
+            <li><strong>Empresa:</strong> ${escapeHtml(compObj?.fantasyName || compObj?.name || targetCompanyId)} (CNPJ: ${escapeHtml(compObj?.cnpj || '—')})</li>
+            <li><strong>Arquivo:</strong> ${escapeHtml(created.fileName)}</li>
+            <li><strong>Categoria:</strong> ${escapeHtml(created.category.toUpperCase())}</li>
+            <li><strong>Competência:</strong> ${escapeHtml(created.competenceMonth)}</li>
+            <li><strong>Status:</strong> ${escapeHtml(created.status.toUpperCase())}</li>
             ${created.amount ? `<li><strong>Valor:</strong> R$ ${created.amount.toFixed(2)}</li>` : ''}
-            <li><strong>Enviado por:</strong> ${created.uploadedBy || 'Sistema'}</li>
+            <li><strong>Enviado por:</strong> ${escapeHtml(created.uploadedBy || 'Sistema')}</li>
           </ul>
           <p style="font-size: 11px; color: #64748b; margin-top: 20px;">Notificação automática enviada pelo ContSuite Contábil.</p>
         </div>

@@ -39,6 +39,7 @@ interface DbStats {
     fees: number;
     payments: number;
     accounts: number;
+    documents?: number;
   };
 }
 
@@ -281,6 +282,14 @@ export const DatabaseView: React.FC<DatabaseViewProps> = ({
               <div className="p-2 rounded-xl bg-slate-50 border border-slate-100">
                 <span className="text-[10px] text-slate-400 block">Plano de Contas</span>
                 <span className="text-sm font-bold text-teal-800">{stats?.counts.accounts ?? 0}</span>
+              </div>
+              <div className="p-2 rounded-xl bg-slate-50 border border-slate-100">
+                <span className="text-[10px] text-slate-400 block">Arquivos Digitalizados</span>
+                <span className="text-sm font-bold text-slate-900">{stats?.counts.documents ?? 0}</span>
+              </div>
+              <div className="p-2 rounded-xl bg-slate-50 border border-slate-100">
+                <span className="text-[10px] text-slate-400 block">Baixas Honorários</span>
+                <span className="text-sm font-bold text-slate-900">{stats?.counts.payments ?? 0}</span>
               </div>
             </div>
           </div>

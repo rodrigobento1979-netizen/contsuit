@@ -79,6 +79,7 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
   const [emailModalData, setEmailModalData] = useState<any | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedText, setCopiedText] = useState(false);
+  const [confirmDeleteUserId, setConfirmDeleteUserId] = useState<string | null>(null);
 
   // SMTP Direct Email Dispatch State
   const [showSmtpModal, setShowSmtpModal] = useState(false);
@@ -629,17 +630,36 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                           </button>
 
                           {onDeleteUser && !isCurrentUser && !isMasterAdmin(u) && (
-                            <button
-                              onClick={() => {
-                                if (confirm(`Deseja remover o usuário ${u.name} (${u.email})?`)) {
-                                  onDeleteUser(u.id);
-                                }
-                              }}
-                              className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer inline-flex items-center"
-                              title="Excluir usuário"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            confirmDeleteUserId === u.id ? (
+                              <div className="inline-flex items-center gap-1 bg-rose-50 border border-rose-200 rounded-lg px-1.5 py-0.5 ml-1">
+                                <span className="text-[10px] font-bold text-rose-800">Remover?</span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setConfirmDeleteUserId(null);
+                                    onDeleteUser(u.id);
+                                  }}
+                                  className="px-1.5 py-0.5 rounded bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold cursor-pointer"
+                                >
+                                  Sim
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteUserId(null)}
+                                  className="px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-600 text-[10px] font-semibold cursor-pointer"
+                                >
+                                  Não
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => setConfirmDeleteUserId(u.id)}
+                                className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer inline-flex items-center"
+                                title="Excluir usuário"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )
                           )}
                         </td>
                       </tr>
@@ -820,17 +840,36 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                         )}
 
                         {onDeleteUser && (
-                          <button
-                            onClick={() => {
-                              if (confirm(`Deseja cancelar o convite de ${u.email}?`)) {
-                                onDeleteUser(u.id);
-                              }
-                            }}
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer"
-                            title="Cancelar convite"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          confirmDeleteUserId === u.id ? (
+                            <div className="inline-flex items-center gap-1 bg-rose-50 border border-rose-200 rounded-lg px-1.5 py-0.5">
+                              <span className="text-[10px] font-bold text-rose-800">Cancelar?</span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setConfirmDeleteUserId(null);
+                                  onDeleteUser(u.id);
+                                }}
+                                className="px-1.5 py-0.5 rounded bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold cursor-pointer"
+                              >
+                                Sim
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteUserId(null)}
+                                className="px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-600 text-[10px] font-semibold cursor-pointer"
+                              >
+                                Não
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setConfirmDeleteUserId(u.id)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer"
+                              title="Cancelar convite"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )
                         )}
                       </div>
                     </div>
@@ -1151,11 +1190,20 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                 </button>
               </div>
 
-              {/* Render email body */}
-              <div 
-                className="p-3 bg-white rounded-xl border border-slate-200 text-slate-800 max-h-52 overflow-y-auto"
-                dangerouslySetInnerHTML={{ __html: emailModalData.bodyHtml }}
-              />
+              {/* Safe structured email preview (no raw HTML injection) */}
+              <div className="p-4 bg-white rounded-xl border border-slate-200 text-slate-800 max-h-56 overflow-y-auto space-y-2.5">
+                <div className="bg-[#004d40] text-white rounded-lg px-3 py-2 text-center">
+                  <div className="font-bold text-sm">ContSuite Contábil</div>
+                  <div className="text-[11px] text-teal-100">{emailModalData.subject || 'Convite de Acesso'}</div>
+                </div>
+                <div className="text-[11px] text-slate-600 space-y-0.5 border-b border-slate-100 pb-2">
+                  <div><strong>Para:</strong> {emailModalData.to}</div>
+                  {emailModalData.cc && <div><strong>Cópia (CC):</strong> {emailModalData.cc}</div>}
+                </div>
+                <p className="text-xs text-slate-700 whitespace-pre-line leading-relaxed">
+                  {emailModalData.plainText || `Acesso liberado para ${emailModalData.to}. Senha provisória: ${emailModalData.defaultPassword || 'ContSuite@2026'}.`}
+                </p>
+              </div>
 
               {(() => {
                 const displayLink = emailModalData.invitationLink?.startsWith('http')

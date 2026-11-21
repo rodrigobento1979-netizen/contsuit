@@ -58,8 +58,15 @@ export interface Asset {
   creditAccount: string; // Depreciação Acumulada
   assetAccount: string; // Conta do Ativo Imobilizado
   status: 'ativo' | 'baixado' | 'totalmente_depreciado' | 'em_manutencao';
+  initialAccumulatedDepreciation?: number;
+  initialAccumulatedDepreciationDate?: string;
+  assetGroup?: string;
+  assetClass?: string;
+  postToTrialBalance?: boolean;
   disposalDate?: string;
   disposalReason?: string;
+  salePrice?: number;
+  gainOrLoss?: number;
   notes?: string;
   createdAt: string;
   updatedAt: string;
@@ -608,6 +615,82 @@ export function deleteAsset(id: string): { removed: boolean; tombstoned: boolean
   return { removed, tombstoned: Boolean(id) };
 }
 
+export function createBulkAssets(
+  assetsInput: Array<Omit<Asset, 'id' | 'createdAt' | 'updatedAt' | 'depreciableValue' | 'monthlyRate'> & { id?: string }>
+): Asset[] {
+  const db = loadDb();
+  if (!db.assets) db.assets = [];
+  if (!db.deletedAssetIds) db.deletedAssetIds = [];
+
+  const createdList: Asset[] = [];
+  const delSet = new Set(db.deletedAssetIds);
+  const baseNow = Date.now();
+
+  assetsInput.forEach((asset, idx) => {
+    if (!asset || !asset.companyId || !asset.description) return;
+    const acqVal = Number(asset.acquisitionValue || 0);
+    const resVal = Number(asset.residualValue || 0);
+    const annRate = Number(asset.annualRate || 10);
+    const depreciableValue = Math.max(0, acqVal - resVal);
+    const monthlyRate = annRate / 12;
+    const nowIso = new Date(baseNow + idx).toISOString();
+    const validId =
+      asset.id && /^[a-zA-Z0-9_-]{3,128}$/.test(asset.id)
+        ? asset.id
+        : `ast-${(baseNow + idx).toString(36)}-${Math.floor(Math.random() * 10000)}`;
+
+    delSet.delete(validId);
+
+    const newAsset: Asset = {
+      ...asset,
+      id: validId,
+      acquisitionValue: acqVal,
+      residualValue: resVal,
+      annualRate: annRate,
+      depreciableValue,
+      monthlyRate,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+    db.assets.push(newAsset);
+    createdList.push(newAsset);
+  });
+
+  db.deletedAssetIds = Array.from(delSet);
+  if (createdList.length > 0) {
+    saveDb(db);
+  }
+  return createdList;
+}
+
+export function deleteBulkAssets(ids: string[]): { removedCount: number; tombstonedCount: number } {
+  const cleanIds = Array.from(new Set((ids || []).filter((id) => typeof id === 'string' && id.trim().length > 0)));
+  if (cleanIds.length === 0) return { removedCount: 0, tombstonedCount: 0 };
+
+  const db = loadDb();
+  if (!db.assets) db.assets = [];
+  if (!db.deletedAssetIds) db.deletedAssetIds = [];
+
+  const targetSet = new Set(cleanIds);
+  const initialLen = db.assets.length;
+  db.assets = db.assets.filter((a) => !targetSet.has(a.id));
+  const removedCount = initialLen - db.assets.length;
+
+  const existingDeleted = new Set(db.deletedAssetIds);
+  let newTombstones = 0;
+  for (const id of cleanIds) {
+    if (!existingDeleted.has(id)) {
+      newTombstones++;
+    }
+  }
+  db.deletedAssetIds = [...cleanIds, ...db.deletedAssetIds.filter((d) => !targetSet.has(d))].slice(0, 2000);
+
+  if (removedCount > 0 || newTombstones > 0) {
+    saveDb(db);
+  }
+  return { removedCount, tombstonedCount: cleanIds.length };
+}
+
 export function upsertAsset(asset: Partial<Asset> & { id: string; companyId: string }) {
   const db = loadDb();
   if ((db.deletedAssetIds || []).includes(asset.id)) return null;
@@ -659,8 +742,18 @@ export function upsertAsset(asset: Partial<Asset> & { id: string; companyId: str
     creditAccount: asset.creditAccount || '1.2.3.09.0001',
     assetAccount: asset.assetAccount || '1.2.3.01.0001',
     status: asset.status || 'ativo',
+    initialAccumulatedDepreciation:
+      asset.initialAccumulatedDepreciation !== undefined
+        ? Number(asset.initialAccumulatedDepreciation)
+        : undefined,
+    initialAccumulatedDepreciationDate: asset.initialAccumulatedDepreciationDate,
+    assetGroup: asset.assetGroup,
+    assetClass: asset.assetClass,
+    postToTrialBalance: asset.postToTrialBalance,
     disposalDate: asset.disposalDate,
     disposalReason: asset.disposalReason,
+    salePrice: asset.salePrice,
+    gainOrLoss: asset.gainOrLoss,
     notes: asset.notes || '',
     createdAt: asset.createdAt || now,
     updatedAt: asset.updatedAt || now,

@@ -114,9 +114,11 @@ export function calculateDepreciationForPeriod(
       continue;
     }
 
-    const startDate = new Date(asset.depreciationStartDate || asset.acquisitionDate);
-    const startYear = startDate.getFullYear();
-    const startMonth = startDate.getMonth() + 1;
+    const rawStartStr = (asset.depreciationStartDate || asset.acquisitionDate || '').slice(0, 10);
+    const startParts = rawStartStr.split('-').map(Number);
+    const startYear = startParts[0] || compYear;
+    const startMonth = startParts[1] || compMonth;
+    const startDate = new Date(startYear, startMonth - 1, startParts[2] || 1);
 
     // Calcular quantos meses se passaram desde o início da depreciação até a competência
     const monthsElapsed = (compYear - startYear) * 12 + (compMonth - startMonth) + 1;
@@ -127,8 +129,7 @@ export function calculateDepreciationForPeriod(
 
     // Calcular data estimada de 100% de depreciação
     const totalUsefulMonths = asset.usefulLifeMonths || (asset.annualRate > 0 ? Math.round(1200 / asset.annualRate) : 60);
-    const endProjectedDate = new Date(startDate);
-    endProjectedDate.setMonth(endProjectedDate.getMonth() + totalUsefulMonths);
+    const endProjectedDate = new Date(startDate.getFullYear(), startDate.getMonth() + totalUsefulMonths, 1);
     const projectedZeroDate = `${endProjectedDate.getFullYear()}-${String(endProjectedDate.getMonth() + 1).padStart(2, '0')}`;
 
     let monthlyDeprec = 0;
@@ -137,7 +138,51 @@ export function calculateDepreciationForPeriod(
     let currentAccumulated = 0;
     let isFullyDepreciated = false;
 
-    if (monthsElapsed <= 0) {
+    if (asset.status === 'totalmente_depreciado' && (asset.initialAccumulatedDepreciation ?? depreciable) >= depreciable - 0.01) {
+      activeAssets++;
+      prevAccumulated = depreciable;
+      currentAccumulated = depreciable;
+      monthlyDeprec = 0;
+      periodDeprec = 0;
+      isFullyDepreciated = true;
+    } else if (
+      asset.initialAccumulatedDepreciation !== undefined &&
+      asset.initialAccumulatedDepreciation >= 0 &&
+      asset.initialAccumulatedDepreciationDate
+    ) {
+      const [cutY, cutM] = asset.initialAccumulatedDepreciationDate.split('-').map(Number);
+      const openingAccum = Math.min(depreciable, Math.max(0, Number(asset.initialAccumulatedDepreciation)));
+      const monthsAfterCutoff = (compYear - cutY) * 12 + (compMonth - cutM);
+
+      if (monthsAfterCutoff <= 0) {
+        if (monthsElapsed > 0) activeAssets++;
+        monthlyDeprec = 0;
+        periodDeprec = 0;
+        prevAccumulated = openingAccum;
+        currentAccumulated = openingAccum;
+        isFullyDepreciated = openingAccum >= depreciable - 0.01 || asset.status === 'totalmente_depreciado';
+      } else {
+        activeAssets++;
+        const effectivePeriodMonths = Math.min(periodMultiplier, monthsAfterCutoff);
+        const prevMonthsAfter = Math.max(0, monthsAfterCutoff - effectivePeriodMonths);
+        prevAccumulated = Math.min(depreciable, openingAccum + prevMonthsAfter * standardMonthlyDeprec);
+
+        if (prevAccumulated >= depreciable - 0.01) {
+          monthlyDeprec = 0;
+          periodDeprec = 0;
+          currentAccumulated = depreciable;
+          isFullyDepreciated = true;
+        } else {
+          const maxPeriodDeprec = standardMonthlyDeprec * effectivePeriodMonths;
+          periodDeprec = Math.min(maxPeriodDeprec, depreciable - prevAccumulated);
+          monthlyDeprec = Math.min(standardMonthlyDeprec, depreciable - prevAccumulated);
+          currentAccumulated = Math.min(depreciable, prevAccumulated + periodDeprec);
+          if (currentAccumulated >= depreciable - 0.01) {
+            isFullyDepreciated = true;
+          }
+        }
+      }
+    } else if (monthsElapsed <= 0) {
       // Bem adquirido no futuro em relação à competência
       monthlyDeprec = 0;
       periodDeprec = 0;
@@ -146,10 +191,11 @@ export function calculateDepreciationForPeriod(
     } else {
       activeAssets++;
       // Meses anteriores à competência
-      const prevMonths = Math.max(0, monthsElapsed - periodMultiplier);
+      const effectivePeriodMonths = Math.min(periodMultiplier, monthsElapsed);
+      const prevMonths = Math.max(0, monthsElapsed - effectivePeriodMonths);
       prevAccumulated = Math.min(depreciable, prevMonths * standardMonthlyDeprec);
 
-      if (prevAccumulated >= depreciable) {
+      if (prevAccumulated >= depreciable - 0.01) {
         // Já estava 100% depreciado no período anterior
         monthlyDeprec = 0;
         periodDeprec = 0;
@@ -157,11 +203,11 @@ export function calculateDepreciationForPeriod(
         isFullyDepreciated = true;
       } else {
         // Depreciação deste período
-        const maxPeriodDeprec = standardMonthlyDeprec * periodMultiplier;
+        const maxPeriodDeprec = standardMonthlyDeprec * effectivePeriodMonths;
         periodDeprec = Math.min(maxPeriodDeprec, depreciable - prevAccumulated);
         monthlyDeprec = Math.min(standardMonthlyDeprec, depreciable - prevAccumulated);
-        currentAccumulated = prevAccumulated + periodDeprec;
-        if (currentAccumulated >= depreciable) {
+        currentAccumulated = Math.min(depreciable, prevAccumulated + periodDeprec);
+        if (currentAccumulated >= depreciable - 0.01) {
           isFullyDepreciated = true;
         }
       }
@@ -393,17 +439,40 @@ export function calculateAssetDisposal(
   salePrice: number = 0,
   disposalReason: 'venda' | 'sucata' | 'descarte' | 'perda' | 'sinistro' = 'venda'
 ): AssetDisposalCalculation {
-  const [dispYear, dispMonth] = disposalDate.split('-').map(Number);
-  const startDate = new Date(asset.depreciationStartDate || asset.acquisitionDate);
-  const startYear = startDate.getFullYear();
-  const startMonth = startDate.getMonth() + 1;
+  const [dispYear, dispMonth] = disposalDate.slice(0, 10).split('-').map(Number);
+  const rawStartStr = (asset.depreciationStartDate || asset.acquisitionDate || '').slice(0, 10);
+  const startParts = rawStartStr.split('-').map(Number);
+  const startYear = startParts[0] || dispYear;
+  const startMonth = startParts[1] || dispMonth;
 
   const monthsElapsed = Math.max(0, (dispYear - startYear) * 12 + (dispMonth - startMonth) + 1);
   const depreciable = Math.max(0, asset.acquisitionValue - (asset.residualValue || 0));
   const monthlyRateDec = (asset.annualRate / 100) / 12;
   const standardMonthlyDeprec = depreciable * monthlyRateDec;
 
-  const accumulatedDepreciation = Math.min(depreciable, monthsElapsed * standardMonthlyDeprec);
+  let accumulatedDepreciation = 0;
+  if (
+    asset.status === 'totalmente_depreciado' &&
+    (asset.initialAccumulatedDepreciation ?? depreciable) >= depreciable - 0.01
+  ) {
+    accumulatedDepreciation = depreciable;
+  } else if (
+    asset.initialAccumulatedDepreciation !== undefined &&
+    asset.initialAccumulatedDepreciation >= 0 &&
+    asset.initialAccumulatedDepreciationDate
+  ) {
+    const [cutY, cutM] = asset.initialAccumulatedDepreciationDate.slice(0, 10).split('-').map(Number);
+    const openingAccum = Math.min(depreciable, Math.max(0, Number(asset.initialAccumulatedDepreciation)));
+    const monthsAfterCutoff = (dispYear - cutY) * 12 + (dispMonth - cutM);
+    if (monthsAfterCutoff <= 0) {
+      accumulatedDepreciation = openingAccum;
+    } else {
+      accumulatedDepreciation = Math.min(depreciable, openingAccum + monthsAfterCutoff * standardMonthlyDeprec);
+    }
+  } else {
+    accumulatedDepreciation = Math.min(depreciable, monthsElapsed * standardMonthlyDeprec);
+  }
+
   const netBookValue = Math.max(0, asset.acquisitionValue - accumulatedDepreciation);
   const gainOrLoss = salePrice - netBookValue;
   const isGain = gainOrLoss >= 0;

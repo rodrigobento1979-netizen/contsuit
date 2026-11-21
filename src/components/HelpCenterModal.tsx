@@ -103,7 +103,9 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
       group: 'Patrimônio',
       summary: 'Inventário patrimonial, cálculo de quotas, baixas e arquivos de exportação.',
       bullets: [
-        'Apuração mensal, trimestral ou anual automática com cálculo de valor residual e vida útil.',
+        'Importação inteligente de planilhas Excel (leitura integral da 1ª aba), preservando Depreciação Acumulada anterior, Grupo, Classe, Situação e contas contábeis.',
+        'Auditoria automática de inconsistências no inventário com filtro, seleção múltipla e exclusão em lote sincronizada (banco, nuvem Firebase e cache).',
+        'Apuração mensal, trimestral ou anual automática com cálculo de valor residual, saldo anterior importado e vida útil.',
         'Baixa de bens com apuração automática de Ganho ou Perda de Capital.',
         'Exportação pronta para NG/Keevo, Domínio Sistemas, Questor CSV e Ficha Patrimonial.',
       ],
@@ -174,6 +176,12 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
   ];
 
   const novidades = [
+    {
+      icon: Building2,
+      badge: 'Novo na v1.2',
+      title: 'Importador Inteligente de Ativos (Planilhas & Dep. Acumulada)',
+      desc: 'Leitura integral da 1ª aba de planilhas do imobilizado com captura de Grupo, Classe, Vida Útil, Situação, Contas Contábeis e Depreciação Acumulada anterior, permitindo revisar e cadastrar um a um com fallback determinístico.',
+    },
     {
       icon: FolderTree,
       badge: 'Novo na v1.2',

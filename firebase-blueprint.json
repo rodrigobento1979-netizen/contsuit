@@ -150,13 +150,40 @@
           "type": "number",
           "description": "Valor residual em R$"
         },
+        "depreciableValue": {
+          "type": "number",
+          "description": "Valor depreciável (aquisição - residual)"
+        },
         "annualRate": {
           "type": "number",
           "description": "Taxa anual de depreciação percentual"
         },
+        "monthlyRate": {
+          "type": "number",
+          "description": "Taxa mensal de depreciação percentual"
+        },
         "usefulLifeMonths": {
           "type": "integer",
           "description": "Vida útil em meses"
+        },
+        "initialAccumulatedDepreciation": {
+          "type": "number",
+          "description": "Depreciação acumulada anterior importada em R$"
+        },
+        "initialAccumulatedDepreciationDate": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "assetGroup": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "assetClass": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "postToTrialBalance": {
+          "type": "boolean"
         },
         "costCenter": {
           "type": "string",
@@ -189,6 +216,20 @@
         "status": {
           "type": "string",
           "enum": ["ativo", "baixado", "totalmente_depreciado", "em_manutencao"]
+        },
+        "disposalDate": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "disposalReason": {
+          "type": "string",
+          "maxLength": 30
+        },
+        "salePrice": {
+          "type": "number"
+        },
+        "gainOrLoss": {
+          "type": "number"
         },
         "notes": {
           "type": "string",

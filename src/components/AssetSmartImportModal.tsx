@@ -19,6 +19,9 @@ import {
   Building2,
   RotateCcw,
   Plus,
+  Calendar,
+  BookOpen,
+  CheckCheck,
 } from 'lucide-react';
 import {
   Asset,
@@ -32,6 +35,7 @@ interface AssetSmartImportModalProps {
   onClose: () => void;
   currentCompany: Company;
   onSaveAsset: (assetData: Partial<Asset>) => Promise<void>;
+  onSaveAssetsBatch?: (assetsData: Partial<Asset>[]) => Promise<void>;
   showToast: (message: string, type?: 'success' | 'error') => void;
 }
 
@@ -61,11 +65,15 @@ interface ReviewItem extends ExtractedAssetCandidate {
 const formatMoney = (val: number) =>
   `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+const formatBrDate = (iso?: string) =>
+  iso && /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso.split('-').reverse().join('/') : iso || '—';
+
 export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
   isOpen,
   onClose,
   currentCompany,
   onSaveAsset,
+  onSaveAssetsBatch,
   showToast,
 }) => {
   const [stage, setStage] = useState<'upload' | 'review' | 'summary'>('upload');
@@ -78,6 +86,7 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
   const [items, setItems] = useState<ReviewItem[]>([]);
   const [currentIndex, setCurrentIndex] = useState<number>(0);
   const [isSavingCurrent, setIsSavingCurrent] = useState(false);
+  const [isSavingAll, setIsSavingAll] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -90,6 +99,7 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
     setItems([]);
     setCurrentIndex(0);
     setIsSavingCurrent(false);
+    setIsSavingAll(false);
   };
 
   const handleClose = () => {
@@ -104,7 +114,8 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
     const skipped = items.filter((i) => i.decision === 'skipped');
     const pending = items.filter((i) => i.decision === 'pending');
     const registeredValue = registered.reduce((acc, i) => acc + Number(i.acquisitionValue || 0), 0);
-    return { registered, skipped, pending, registeredValue };
+    const registeredAccDep = registered.reduce((acc, i) => acc + Number(i.accumulatedDepreciation || 0), 0);
+    return { registered, skipped, pending, registeredValue, registeredAccDep };
   }, [items]);
 
   if (!isOpen) return null;
@@ -156,6 +167,18 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
 
       const reviewQueue: ReviewItem[] = (data.candidates || []).map((c) => ({
         ...c,
+        debitAccount:
+          c.debitAccount ||
+          currentCompany.chartOfAccounts?.depreciationExpenseAccount ||
+          '3.1.2.04.0010',
+        creditAccount:
+          c.creditAccount ||
+          currentCompany.chartOfAccounts?.accumulatedDepreciationAccount ||
+          '1.2.3.09.0001',
+        assetAccount:
+          c.assetAccount ||
+          currentCompany.chartOfAccounts?.assetDefaultAccount ||
+          '1.2.3.01.0001',
         decision: 'pending',
       }));
 
@@ -183,6 +206,7 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
       categoryLabel: found.label,
       annualRate: found.rate,
       usefulLifeMonths: found.months,
+      usefulLifeYears: Math.round((found.months / 12) * 10) / 10,
     });
   };
 
@@ -192,11 +216,71 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
     updateCurrentItem({
       annualRate: validRate,
       usefulLifeMonths: months,
+      usefulLifeYears: Math.round((months / 12) * 10) / 10,
     });
   };
 
+  const buildAssetPayload = (item: ReviewItem): Partial<Asset> => {
+    const notesParts = [
+      item.notes,
+      item.sourceSheet ? `Origem: ${item.sourceSheet}${item.sourceRow ? ` (Linha ${item.sourceRow})` : ''}` : '',
+      item.marking ? `Marcação: ${item.marking}` : '',
+      item.depreciationHistoryNote ? `Histórico Dep.: ${item.depreciationHistoryNote}` : '',
+      item.lastPeriodQuota ? `Última Quota: ${formatMoney(item.lastPeriodQuota)}` : '',
+    ].filter(Boolean);
+
+    const accDep = Number(item.accumulatedDepreciation || 0);
+    const acqVal = Number(item.acquisitionValue || 0);
+    const resVal = Number(item.residualValue || 0);
+    const depreciable = Math.max(0, acqVal - resVal);
+    const derivedStatus: Asset['status'] =
+      item.status ||
+      (accDep > 0 && depreciable > 0 && accDep >= depreciable - 0.01
+        ? 'totalmente_depreciado'
+        : 'ativo');
+
+    return {
+      companyId: currentCompany.id,
+      description: item.description.trim(),
+      tagNumber: item.tagNumber.trim() || `PAT-${Math.floor(1000 + Math.random() * 9000)}`,
+      category: item.category,
+      categoryLabel: item.categoryLabel,
+      assetGroup: item.assetGroup,
+      assetClass: item.assetClass,
+      postToTrialBalance: item.postToTrialBalance,
+      status: derivedStatus,
+      acquisitionDate: item.acquisitionDate || item.depreciationStartDate || new Date().toISOString().slice(0, 10),
+      depreciationStartDate: item.depreciationStartDate || item.acquisitionDate || new Date().toISOString().slice(0, 10),
+      acquisitionValue: acqVal,
+      residualValue: resVal,
+      initialAccumulatedDepreciation: accDep > 0 ? Number(accDep.toFixed(2)) : 0,
+      initialAccumulatedDepreciationDate:
+        accDep > 0
+          ? item.accumulatedDepreciationDate || item.depreciationStartDate || item.acquisitionDate
+          : undefined,
+      annualRate: Number(item.annualRate || 10),
+      usefulLifeMonths: Number(item.usefulLifeMonths || 120),
+      costCenter: item.costCenter || item.marking || 'Administrativo',
+      location: item.location || 'Sede Principal',
+      supplier: item.supplier || '',
+      invoiceNumber: item.invoiceNumber || '',
+      debitAccount:
+        item.debitAccount ||
+        currentCompany.chartOfAccounts?.depreciationExpenseAccount ||
+        '3.1.2.04.0010',
+      creditAccount:
+        item.creditAccount ||
+        currentCompany.chartOfAccounts?.accumulatedDepreciationAccount ||
+        '1.2.3.09.0001',
+      assetAccount:
+        item.assetAccount ||
+        currentCompany.chartOfAccounts?.assetDefaultAccount ||
+        '1.2.3.01.0001',
+      notes: notesParts.join(' • '),
+    };
+  };
+
   const advanceToNextOrSummary = (updatedItems: ReviewItem[], fromIdx: number) => {
-    // 1. Prefer next pending item after currentIndex
     const nextPendingAfter = updatedItems.findIndex(
       (item, idx) => idx > fromIdx && item.decision === 'pending'
     );
@@ -204,13 +288,11 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
       setCurrentIndex(nextPendingAfter);
       return;
     }
-    // 2. Or any remaining pending item earlier in the list
     const anyPending = updatedItems.findIndex((item) => item.decision === 'pending');
     if (anyPending !== -1) {
       setCurrentIndex(anyPending);
       return;
     }
-    // 3. Otherwise if there is a next item in sequence, move or finish
     if (fromIdx + 1 < updatedItems.length) {
       setCurrentIndex(fromIdx + 1);
       return;
@@ -219,7 +301,7 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
   };
 
   const handleRegisterCurrent = async () => {
-    if (!currentItem || isSavingCurrent) return;
+    if (!currentItem || isSavingCurrent || isSavingAll) return;
     if (!currentItem.description.trim()) {
       showToast('Informe a descrição do bem antes de cadastrar.', 'error');
       return;
@@ -231,39 +313,7 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
 
     setIsSavingCurrent(true);
     try {
-      const notesParts = [
-        currentItem.notes,
-        currentItem.sourceSheet ? `Origem: ${currentItem.sourceSheet}` : '',
-        currentItem.isSummaryEntry ? 'Extraído de aba resumida com revisão IA' : '',
-        currentItem.accumulatedDepreciation
-          ? `Deprec. acumulada informada na planilha: ${formatMoney(currentItem.accumulatedDepreciation)}`
-          : '',
-      ].filter(Boolean);
-
-      await onSaveAsset({
-        companyId: currentCompany.id,
-        description: currentItem.description.trim(),
-        tagNumber: currentItem.tagNumber.trim() || `PAT-${Math.floor(1000 + Math.random() * 9000)}`,
-        category: currentItem.category,
-        categoryLabel: currentItem.categoryLabel,
-        acquisitionDate: currentItem.acquisitionDate || new Date().toISOString().slice(0, 10),
-        depreciationStartDate: currentItem.acquisitionDate || new Date().toISOString().slice(0, 10),
-        acquisitionValue: Number(currentItem.acquisitionValue),
-        residualValue: Number(currentItem.residualValue || 0),
-        annualRate: Number(currentItem.annualRate || 10),
-        usefulLifeMonths: Number(currentItem.usefulLifeMonths || 120),
-        costCenter: currentItem.costCenter || 'Administrativo',
-        location: currentItem.location || 'Sede Principal',
-        supplier: currentItem.supplier || '',
-        invoiceNumber: currentItem.invoiceNumber || '',
-        debitAccount:
-          currentCompany.chartOfAccounts?.depreciationExpenseAccount || '3.1.2.04.0010',
-        creditAccount:
-          currentCompany.chartOfAccounts?.accumulatedDepreciationAccount || '1.2.3.09.0001',
-        assetAccount:
-          currentCompany.chartOfAccounts?.assetDefaultAccount || '1.2.3.01.0001',
-        notes: notesParts.join(' • '),
-      });
+      await onSaveAsset(buildAssetPayload(currentItem));
 
       const nextList: ReviewItem[] = items.map((item, idx) =>
         idx === currentIndex ? { ...item, decision: 'registered' } : item
@@ -277,8 +327,60 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
     }
   };
 
+  const handleRegisterAllPending = async () => {
+    if (isSavingAll || isSavingCurrent || stats.pending.length === 0) return;
+    setIsSavingAll(true);
+    let savedCount = 0;
+    const nextItems = [...items];
+
+    try {
+      const validIndices: number[] = [];
+      const payloads: Partial<Asset>[] = [];
+
+      for (let i = 0; i < nextItems.length; i++) {
+        const it = nextItems[i];
+        if (it.decision !== 'pending') continue;
+        if (!it.description.trim() || Number(it.acquisitionValue) <= 0) continue;
+        validIndices.push(i);
+        payloads.push(buildAssetPayload(it));
+      }
+
+      if (payloads.length === 0) {
+        showToast('Nenhum item pendente possui descrição e valor válido (> 0) para cadastrar.', 'error');
+        setIsSavingAll(false);
+        return;
+      }
+
+      if (onSaveAssetsBatch) {
+        await onSaveAssetsBatch(payloads);
+        validIndices.forEach((idx) => {
+          nextItems[idx] = { ...nextItems[idx], decision: 'registered' };
+        });
+        savedCount = payloads.length;
+      } else {
+        for (const idx of validIndices) {
+          await onSaveAsset(buildAssetPayload(nextItems[idx]));
+          nextItems[idx] = { ...nextItems[idx], decision: 'registered' };
+          savedCount++;
+        }
+        showToast(`${savedCount} bem(ns) cadastrado(s) com sucesso no inventário!`, 'success');
+      }
+
+      setItems(nextItems);
+      setStage('summary');
+    } catch (err: any) {
+      setItems(nextItems);
+      showToast(
+        err?.message || `Importação interrompida após ${savedCount} cadastro(s).`,
+        'error'
+      );
+    } finally {
+      setIsSavingAll(false);
+    }
+  };
+
   const handleSkipCurrent = () => {
-    if (!currentItem) return;
+    if (!currentItem || isSavingAll) return;
     const nextList: ReviewItem[] = items.map((item, idx) =>
       idx === currentIndex ? { ...item, decision: 'skipped' } : item
     );
@@ -294,14 +396,21 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
       category: 'maquinas',
       categoryLabel: 'Máquinas e Equipamentos',
       acquisitionDate: new Date().toISOString().slice(0, 10),
+      depreciationStartDate: new Date().toISOString().slice(0, 10),
       acquisitionValue: 0,
       residualValue: 0,
+      accumulatedDepreciation: 0,
       annualRate: 10,
       usefulLifeMonths: 120,
+      usefulLifeYears: 10,
+      status: 'ativo',
       costCenter: 'Administrativo',
       location: 'Sede Principal',
       supplier: '',
       invoiceNumber: '',
+      debitAccount: currentCompany.chartOfAccounts?.depreciationExpenseAccount || '3.1.2.04.0010',
+      creditAccount: currentCompany.chartOfAccounts?.accumulatedDepreciationAccount || '1.2.3.09.0001',
+      assetAccount: currentCompany.chartOfAccounts?.assetDefaultAccount || '1.2.3.01.0001',
       sourceSheet: 'Inclusão Manual',
       confidence: 100,
       decision: 'pending',
@@ -320,7 +429,7 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4">
-      <div className="bg-white rounded-2xl max-w-3xl w-full shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[94dvh]">
+      <div className="bg-white rounded-2xl max-w-4xl w-full shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[94dvh]">
         {/* Header */}
         <div className="bg-[#004d40] px-4 sm:px-5 py-3.5 text-white flex items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
@@ -329,10 +438,10 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
             </div>
             <div className="min-w-0">
               <h2 className="font-bold text-sm sm:text-base leading-tight truncate">
-                Leitura IA de Planilhas & Documentos (Um a Um)
+                Leitura Completa de Planilhas & Documentos (Um a Um)
               </h2>
               <p className="text-[11px] text-teal-100 truncate">
-                {currentCompany.fantasyName || currentCompany.name} • Identifica abas analíticas e resumidas
+                {currentCompany.fantasyName || currentCompany.name} • Lê 100% da 1ª aba, Depreciação Acumulada e Contas Contábeis
               </p>
             </div>
           </div>
@@ -376,13 +485,13 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
                     </div>
                     <div>
                       <p className="font-bold text-slate-900 text-sm">
-                        Lendo todas as abas e identificando bens com IA...
+                        Extraindo todas as colunas da planilha e saldos de depreciação...
                       </p>
                       <p className="text-xs text-slate-500 mt-1">
                         Arquivo: <strong className="text-slate-700">{selectedFile?.name}</strong>
                       </p>
                       <p className="text-[11px] text-teal-700 mt-1">
-                        Inspecionando abas detalhadas, abas resumidas, datas, valores e taxas CPC 27.
+                        Mapeando Custo Base, Depreciação Acumulada, Contas Contábeis, Vida Útil e Situação.
                       </p>
                     </div>
                   </div>
@@ -393,10 +502,10 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
                     </div>
                     <div>
                       <p className="font-bold text-slate-900 text-sm">
-                        Enviar Planilha Multi-Abas, PDF, XML ou Foto de Nota
+                        Enviar Planilha de Controle de Ativo, PDF, XML ou Foto de Nota
                       </p>
                       <p className="text-xs text-slate-500 mt-1">
-                        Suporta <strong>.XLSX, .XLS, .ODS, .CSV</strong> (inclusive abas resumidas), <strong>NF-e .XML, .PDF e Imagens</strong>.
+                        Suporta <strong>.XLSX, .XLS, .ODS, .CSV</strong> (importação integral da 1ª aba + Dep. Acumulada), <strong>NF-e .XML, .PDF e Imagens</strong>.
                       </p>
                     </div>
                     <div className="pt-2">
@@ -423,28 +532,28 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
                 <div className="p-3 rounded-xl border border-slate-200 bg-white">
                   <div className="flex items-center gap-1.5 font-bold text-slate-800 mb-1">
                     <Layers className="w-3.5 h-3.5 text-teal-600" />
-                    <span>Abas Resumidas</span>
+                    <span>1ª Aba Integral</span>
                   </div>
                   <p className="text-[11px] text-slate-500 leading-relaxed">
-                    A IA varre todas as abas do Excel — incluindo guias "Resumo" ou "Sintético" — sem perder nenhum bem ou grupo.
+                    Lê todos os bens sem truncamento, capturando Grupo, Classe, Marcação, Vida Útil (anos) e Contas Contábeis.
                   </p>
                 </div>
                 <div className="p-3 rounded-xl border border-slate-200 bg-white">
                   <div className="flex items-center gap-1.5 font-bold text-slate-800 mb-1">
                     <CheckCircle2 className="w-3.5 h-3.5 text-teal-600" />
-                    <span>Revisão Um a Um</span>
+                    <span>Depreciação Acumulada</span>
                   </div>
                   <p className="text-[11px] text-slate-500 leading-relaxed">
-                    Cada bem aparece individualmente com sugestão contábil para você escolher <strong>Cadastrar</strong> ou <strong>Não Cadastrar</strong>.
+                    Preserva o saldo de <strong>Dep. Acumulada</strong> já existente na planilha e continua a apuração a partir da data de corte.
                   </p>
                 </div>
                 <div className="p-3 rounded-xl border border-slate-200 bg-white">
                   <div className="flex items-center gap-1.5 font-bold text-slate-800 mb-1">
                     <Building2 className="w-3.5 h-3.5 text-teal-600" />
-                    <span>Sincronia Total</span>
+                    <span>Revisão Um a Um</span>
                   </div>
                   <p className="text-[11px] text-slate-500 leading-relaxed">
-                    Os bens aprovados entram direto no Inventário CPC 27 e no cálculo de depreciação da empresa selecionada.
+                    Confira cada item individualmente ou aprove os pendentes em lote direto para o inventário CPC 27.
                   </p>
                 </div>
               </div>
@@ -464,22 +573,45 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
                         {extractionMeta.fileName}
                       </span>
                       <span className="text-[10px] font-semibold text-teal-800 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded-md">
-                        {extractionMeta.usedAi ? 'Leitura Gemini IA' : 'Leitor Estruturado Multi-Abas'}
+                        {extractionMeta.usedAi ? 'Extração Integral + IA' : 'Leitor Contábil Completo'}
                       </span>
                     </div>
-                    <div className="flex items-center gap-3 font-mono tabular-nums text-[11px]">
+                    <div className="flex flex-wrap items-center gap-2.5 font-mono tabular-nums text-[11px]">
                       <span className="text-emerald-700 font-bold">
                         {stats.registered.length} cadastrado(s)
                       </span>
                       <span className="text-slate-500">
                         {stats.skipped.length} pulado(s)
                       </span>
+                      {stats.pending.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={handleRegisterAllPending}
+                          disabled={isSavingAll || isSavingCurrent}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-teal-700 hover:bg-teal-800 text-white font-sans font-bold text-[11px] transition cursor-pointer disabled:opacity-50"
+                        >
+                          {isSavingAll ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <CheckCheck className="w-3.5 h-3.5" />
+                          )}
+                          <span>
+                            {isSavingAll
+                              ? 'Cadastrando...'
+                              : `Cadastrar Todos (${stats.pending.length})`}
+                          </span>
+                        </button>
+                      )}
                     </div>
                   </div>
 
+                  {extractionMeta.summaryText && (
+                    <p className="text-[11px] text-slate-600">{extractionMeta.summaryText}</p>
+                  )}
+
                   {extractionMeta.sheetsAnalyzed.length > 0 && (
                     <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-600">
-                      <span className="font-semibold text-slate-700">Abas lidas:</span>
+                      <span className="font-semibold text-slate-700">Abas detectadas:</span>
                       {extractionMeta.sheetsAnalyzed.map((s, idx) => (
                         <span
                           key={`${s.name}-${idx}`}
@@ -545,17 +677,17 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
                         <span className="font-bold text-slate-800 font-mono tabular-nums shrink-0">
                           Bem {currentIndex + 1} de {items.length}
                         </span>
-                        {items.length > 5 && (
+                        {items.length > 3 && (
                           <select
                             value={currentIndex}
                             onChange={(e) => setCurrentIndex(Number(e.target.value))}
-                            className="max-w-[200px] sm:max-w-[260px] px-2 py-1 rounded-lg border border-slate-200 bg-white text-[11px] font-medium text-slate-700 truncate cursor-pointer"
+                            className="max-w-[200px] sm:max-w-[280px] px-2 py-1 rounded-lg border border-slate-200 bg-white text-[11px] font-medium text-slate-700 truncate cursor-pointer"
                             aria-label="Ir para o bem"
                           >
                             {items.map((it, idx) => (
                               <option key={it.tempId} value={idx}>
                                 #{idx + 1} {it.decision === 'registered' ? '✓ ' : it.decision === 'skipped' ? '— ' : ''}
-                                {it.description || `Item ${idx + 1}`}
+                                {it.tagNumber ? `[${it.tagNumber}] ` : ''}{it.description || `Item ${idx + 1}`}
                               </option>
                             ))}
                           </select>
@@ -635,14 +767,24 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
                               {currentItem.sourceRow ? ` (Linha ${currentItem.sourceRow})` : ''}
                             </span>
                           )}
-                          {currentItem.isSummaryEntry && (
-                            <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-800 font-bold border border-amber-200">
-                              Linha de Aba Resumida
+                          {currentItem.assetGroup && (
+                            <span className="px-2 py-0.5 rounded bg-teal-50 text-teal-800 font-semibold border border-teal-200">
+                              Grupo: {currentItem.assetGroup}
                             </span>
                           )}
-                          {typeof currentItem.confidence === 'number' && (
-                            <span className="text-slate-500 font-mono tabular-nums">
-                              Confiança IA: {currentItem.confidence}%
+                          {currentItem.assetClass && (
+                            <span className="px-2 py-0.5 rounded bg-slate-50 text-slate-700 font-medium border border-slate-200">
+                              Classe: {currentItem.assetClass}
+                            </span>
+                          )}
+                          {currentItem.marking && (
+                            <span className="px-2 py-0.5 rounded bg-indigo-50 text-indigo-800 font-bold border border-indigo-200">
+                              Marcação: {currentItem.marking}
+                            </span>
+                          )}
+                          {typeof currentItem.postToTrialBalance === 'boolean' && (
+                            <span className="px-2 py-0.5 rounded bg-slate-50 text-slate-700 border border-slate-200">
+                              Balancete: <strong>{currentItem.postToTrialBalance ? 'Sim' : 'Não'}</strong>
                             </span>
                           )}
                         </div>
@@ -674,11 +816,11 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
                         </div>
                       )}
 
-                      {/* Form Grid */}
+                      {/* Primary Identification & Rules Grid */}
                       <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 text-xs">
-                        <div className="sm:col-span-8">
+                        <div className="sm:col-span-6">
                           <label className="block font-semibold text-slate-700 mb-1">
-                            Descrição do Bem / Grupo *
+                            Descrição do Bem *
                           </label>
                           <input
                             type="text"
@@ -691,9 +833,9 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
                           />
                         </div>
 
-                        <div className="sm:col-span-4">
+                        <div className="sm:col-span-3">
                           <label className="block font-semibold text-slate-700 mb-1">
-                            Plaqueta / Tombo
+                            Nº / Plaqueta
                           </label>
                           <input
                             type="text"
@@ -705,7 +847,25 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
                           />
                         </div>
 
-                        <div className="sm:col-span-6">
+                        <div className="sm:col-span-3">
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Situação do Bem
+                          </label>
+                          <select
+                            value={currentItem.status || 'ativo'}
+                            onChange={(e) =>
+                              updateCurrentItem({ status: e.target.value as Asset['status'] })
+                            }
+                            className="w-full p-2.5 rounded-xl border border-slate-300 bg-white font-semibold text-slate-800 cursor-pointer focus:outline-none focus:ring-2 focus:ring-teal-500"
+                          >
+                            <option value="ativo">Em Depreciação (Ativo)</option>
+                            <option value="totalmente_depreciado">Totalmente Depreciado</option>
+                            <option value="baixado">Baixado / Alienado</option>
+                            <option value="em_manutencao">Em Manutenção</option>
+                          </select>
+                        </div>
+
+                        <div className="sm:col-span-5">
                           <label className="block font-semibold text-slate-700 mb-1">
                             Categoria Contábil (CPC 27)
                           </label>
@@ -726,19 +886,42 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
 
                         <div className="sm:col-span-3">
                           <label className="block font-semibold text-slate-700 mb-1">
-                            Data Aquisição
+                            Início da Depreciação
                           </label>
                           <input
                             type="date"
-                            value={currentItem.acquisitionDate}
+                            value={currentItem.depreciationStartDate || currentItem.acquisitionDate}
                             onChange={(e) =>
-                              updateCurrentItem({ acquisitionDate: e.target.value })
+                              updateCurrentItem({
+                                depreciationStartDate: e.target.value,
+                                acquisitionDate: e.target.value,
+                              })
                             }
                             className="w-full p-2.5 rounded-xl border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
                           />
                         </div>
 
-                        <div className="sm:col-span-3">
+                        <div className="sm:col-span-2">
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Vida Útil (Meses)
+                          </label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={currentItem.usefulLifeMonths}
+                            onChange={(e) => {
+                              const m = Math.max(1, parseInt(e.target.value, 10) || 12);
+                              updateCurrentItem({
+                                usefulLifeMonths: m,
+                                usefulLifeYears: Math.round((m / 12) * 10) / 10,
+                                annualRate: Number(((12 / m) * 100).toFixed(2)),
+                              });
+                            }}
+                            className="w-full p-2.5 rounded-xl border border-slate-300 bg-white font-mono tabular-nums font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                          />
+                        </div>
+
+                        <div className="sm:col-span-2">
                           <label className="block font-semibold text-slate-700 mb-1">
                             Taxa Anual (%)
                           </label>
@@ -758,7 +941,7 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
 
                         <div className="sm:col-span-4">
                           <label className="block font-semibold text-slate-700 mb-1">
-                            Valor de Aquisição (R$) *
+                            Custo Base / Aquisição (R$) *
                           </label>
                           <div className="relative">
                             <DollarSign className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-3" />
@@ -779,7 +962,7 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
 
                         <div className="sm:col-span-4">
                           <label className="block font-semibold text-slate-700 mb-1">
-                            Valor Residual (R$)
+                            Valor Residual Final (R$)
                           </label>
                           <input
                             type="number"
@@ -797,7 +980,7 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
 
                         <div className="sm:col-span-4">
                           <label className="block font-semibold text-slate-700 mb-1">
-                            Centro de Custo
+                            Centro de Custo / Marcação
                           </label>
                           <input
                             type="text"
@@ -805,39 +988,172 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
                             onChange={(e) =>
                               updateCurrentItem({ costCenter: e.target.value })
                             }
-                            placeholder="Administrativo / Produção"
+                            placeholder="Administrativo / AVR / MV"
                             className="w-full p-2.5 rounded-xl border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
                           />
                         </div>
+                      </div>
 
-                        <div className="sm:col-span-6">
-                          <label className="block font-semibold text-slate-700 mb-1">
-                            Fornecedor / Emitente
-                          </label>
-                          <input
-                            type="text"
-                            value={currentItem.supplier}
-                            onChange={(e) =>
-                              updateCurrentItem({ supplier: e.target.value })
-                            }
-                            placeholder="Opcional"
-                            className="w-full p-2.5 rounded-xl border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
-                          />
+                      {/* Highlighted Accumulated Depreciation Section */}
+                      <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3 space-y-2.5 text-xs">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 font-bold text-amber-950">
+                            <Calendar className="w-3.5 h-3.5 text-amber-700" />
+                            <span>Depreciação Acumulada & Saldo Contábil Importado</span>
+                          </div>
+                          {typeof currentItem.accumulatedDepreciationMonths === 'number' && (
+                            <span className="text-[11px] font-mono font-bold text-amber-900 bg-white px-2 py-0.5 rounded border border-amber-200">
+                              {currentItem.accumulatedDepreciationMonths} meses decorridos
+                            </span>
+                          )}
                         </div>
 
-                        <div className="sm:col-span-6">
-                          <label className="block font-semibold text-slate-700 mb-1">
-                            Nota Fiscal / Documento
-                          </label>
-                          <input
-                            type="text"
-                            value={currentItem.invoiceNumber}
-                            onChange={(e) =>
-                              updateCurrentItem({ invoiceNumber: e.target.value })
-                            }
-                            placeholder="Ex: NF-e 12450"
-                            className="w-full p-2.5 rounded-xl border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
-                          />
+                        <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+                          <div className="sm:col-span-4">
+                            <label className="block font-semibold text-amber-950 mb-1">
+                              Deprec. Acumulada Inicial (R$)
+                            </label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={currentItem.accumulatedDepreciation ?? 0}
+                              onChange={(e) =>
+                                updateCurrentItem({
+                                  accumulatedDepreciation: Number(e.target.value),
+                                })
+                              }
+                              className="w-full p-2 rounded-lg border border-amber-300 bg-white font-mono tabular-nums font-bold text-amber-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                            />
+                          </div>
+
+                          <div className="sm:col-span-4">
+                            <label className="block font-semibold text-amber-950 mb-1">
+                              Data de Corte do Saldo
+                            </label>
+                            <input
+                              type="date"
+                              value={currentItem.accumulatedDepreciationDate || ''}
+                              onChange={(e) =>
+                                updateCurrentItem({
+                                  accumulatedDepreciationDate: e.target.value,
+                                })
+                              }
+                              className="w-full p-2 rounded-lg border border-amber-300 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                            />
+                          </div>
+
+                          <div className="sm:col-span-4 bg-white rounded-lg border border-amber-200 px-2.5 py-1.5 flex flex-col justify-center">
+                            <span className="text-[10px] font-semibold text-slate-500 uppercase">
+                              Valor Contábil Líquido (Saldo)
+                            </span>
+                            <span className="font-mono tabular-nums font-extrabold text-sm text-emerald-700">
+                              {formatMoney(
+                                currentItem.netBookValueImported !== undefined
+                                  ? currentItem.netBookValueImported
+                                  : Math.max(
+                                      0,
+                                      Number(currentItem.acquisitionValue || 0) -
+                                        Number(currentItem.accumulatedDepreciation || 0)
+                                    )
+                              )}
+                            </span>
+                            {currentItem.lastPeriodQuota !== undefined && (
+                              <span className="text-[10px] text-slate-500 font-mono tabular-nums">
+                                Última Quota: {formatMoney(currentItem.lastPeriodQuota)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {currentItem.depreciationHistoryNote && (
+                          <div className="text-[11px] text-amber-900 bg-white/80 rounded-lg px-2.5 py-1.5 border border-amber-200/70 font-mono tabular-nums">
+                            <strong>Marcos da planilha:</strong> {currentItem.depreciationHistoryNote}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Accounting Chart of Accounts & Supplier/NF */}
+                      <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2.5 text-xs">
+                        <div className="flex items-center gap-1.5 font-bold text-slate-800">
+                          <BookOpen className="w-3.5 h-3.5 text-teal-700" />
+                          <span>Contas Contábeis & Origem</span>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+                          <div className="sm:col-span-4">
+                            <label className="block font-semibold text-slate-700 mb-1">
+                              Conta do Imobilizado
+                            </label>
+                            <input
+                              type="text"
+                              value={currentItem.assetAccount || ''}
+                              onChange={(e) =>
+                                updateCurrentItem({ assetAccount: e.target.value })
+                              }
+                              placeholder="1.2.3.01.0001"
+                              className="w-full p-2 rounded-lg border border-slate-300 bg-white font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                            />
+                          </div>
+
+                          <div className="sm:col-span-4">
+                            <label className="block font-semibold text-slate-700 mb-1">
+                              Conta Dep. Acumulada
+                            </label>
+                            <input
+                              type="text"
+                              value={currentItem.creditAccount || ''}
+                              onChange={(e) =>
+                                updateCurrentItem({ creditAccount: e.target.value })
+                              }
+                              placeholder="1.2.3.09.0001"
+                              className="w-full p-2 rounded-lg border border-slate-300 bg-white font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                            />
+                          </div>
+
+                          <div className="sm:col-span-4">
+                            <label className="block font-semibold text-slate-700 mb-1">
+                              Conta Despesa Deprec.
+                            </label>
+                            <input
+                              type="text"
+                              value={currentItem.debitAccount || ''}
+                              onChange={(e) =>
+                                updateCurrentItem({ debitAccount: e.target.value })
+                              }
+                              placeholder="3.1.2.04.0010"
+                              className="w-full p-2 rounded-lg border border-slate-300 bg-white font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                            />
+                          </div>
+
+                          <div className="sm:col-span-6">
+                            <label className="block font-semibold text-slate-700 mb-1">
+                              Fornecedor / Emitente
+                            </label>
+                            <input
+                              type="text"
+                              value={currentItem.supplier}
+                              onChange={(e) =>
+                                updateCurrentItem({ supplier: e.target.value })
+                              }
+                              placeholder="Opcional"
+                              className="w-full p-2 rounded-lg border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                            />
+                          </div>
+
+                          <div className="sm:col-span-6">
+                            <label className="block font-semibold text-slate-700 mb-1">
+                              Nota Fiscal / Documento
+                            </label>
+                            <input
+                              type="text"
+                              value={currentItem.invoiceNumber}
+                              onChange={(e) =>
+                                updateCurrentItem({ invoiceNumber: e.target.value })
+                              }
+                              placeholder="Ex: NF-e 12450"
+                              className="w-full p-2 rounded-lg border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                            />
+                          </div>
                         </div>
                       </div>
 
@@ -874,7 +1190,8 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
                             )}
                             /mês
                           </strong>{' '}
-                          ({currentItem.usefulLifeMonths} meses)
+                          ({currentItem.usefulLifeMonths} meses •{' '}
+                          {currentItem.usefulLifeYears || Math.round((currentItem.usefulLifeMonths / 12) * 10) / 10} anos)
                         </div>
                       </div>
                     </div>
@@ -892,14 +1209,14 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
                   <CheckCircle2 className="w-6 h-6" />
                 </div>
                 <h3 className="font-extrabold text-slate-900 text-base">
-                  Revisão Um a Um Concluída
+                  Revisão Concluída
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Confira abaixo os bens cadastrados no inventário e os itens ignorados durante a conferência.
+                  Confira abaixo os bens cadastrados no inventário com seus saldos iniciais e os itens pulados.
                 </p>
               </div>
 
-              <div className="grid grid-cols-3 gap-2.5 text-xs">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
                 <div className="p-3 rounded-xl border border-emerald-200 bg-emerald-50/50">
                   <span className="text-emerald-800 font-semibold">Cadastrados</span>
                   <div className="text-lg font-extrabold text-emerald-700 font-mono tabular-nums mt-0.5">
@@ -913,9 +1230,15 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
                   </div>
                 </div>
                 <div className="p-3 rounded-xl border border-teal-200 bg-teal-50/50">
-                  <span className="text-teal-800 font-semibold">Total Incorporado</span>
-                  <div className="text-base sm:text-lg font-extrabold text-teal-800 font-mono tabular-nums mt-0.5">
+                  <span className="text-teal-800 font-semibold">Custo Base Total</span>
+                  <div className="text-sm sm:text-base font-extrabold text-teal-800 font-mono tabular-nums mt-0.5">
                     {formatMoney(stats.registeredValue)}
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl border border-amber-200 bg-amber-50/50">
+                  <span className="text-amber-800 font-semibold">Dep. Acum. Importada</span>
+                  <div className="text-sm sm:text-base font-extrabold text-amber-800 font-mono tabular-nums mt-0.5">
+                    {formatMoney(stats.registeredAccDep)}
                   </div>
                 </div>
               </div>
@@ -930,9 +1253,15 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
                       <div className="font-bold text-slate-900 truncate">
                         {item.description || `Item ${idx + 1}`}
                       </div>
-                      <div className="text-[11px] text-slate-500 flex items-center gap-2">
+                      <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-2">
                         <span className="font-mono">{item.tagNumber}</span>
-                        {item.sourceSheet && <span>• Aba: {item.sourceSheet}</span>}
+                        {item.assetAccount && <span>• Cta: {item.assetAccount}</span>}
+                        {(item.accumulatedDepreciation || 0) > 0 && (
+                          <span className="text-amber-700 font-mono">
+                            • Dep. Acum ({formatBrDate(item.accumulatedDepreciationDate)}):{' '}
+                            {formatMoney(item.accumulatedDepreciation || 0)}
+                          </span>
+                        )}
                       </div>
                     </div>
                     <div className="flex items-center gap-2.5 shrink-0">
@@ -968,7 +1297,7 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
           {stage === 'upload' && (
             <>
               <span className="text-[11px] text-slate-500">
-                Análise segura via servidor ContSuite IA
+                Leitura estruturada completa + IA ContSuite
               </span>
               <button
                 type="button"
@@ -986,7 +1315,7 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
                 <button
                   type="button"
                   onClick={resetAll}
-                  disabled={isSavingCurrent}
+                  disabled={isSavingCurrent || isSavingAll}
                   className="px-3 py-2 rounded-xl border border-slate-300 bg-white text-slate-700 text-xs font-semibold hover:bg-slate-100 cursor-pointer"
                 >
                   Trocar Arquivo
@@ -995,7 +1324,7 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setStage('summary')}
-                    disabled={isSavingCurrent}
+                    disabled={isSavingCurrent || isSavingAll}
                     className="px-3 py-2 rounded-xl border border-slate-300 bg-white text-slate-700 text-xs font-semibold hover:bg-slate-100 cursor-pointer"
                   >
                     Ver Resumo
@@ -1008,7 +1337,7 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
                   <button
                     type="button"
                     onClick={handleSkipCurrent}
-                    disabled={isSavingCurrent}
+                    disabled={isSavingCurrent || isSavingAll}
                     className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold transition cursor-pointer flex items-center gap-1.5"
                   >
                     <SkipForward className="w-3.5 h-3.5 text-slate-500" />
@@ -1017,7 +1346,7 @@ export const AssetSmartImportModal: React.FC<AssetSmartImportModalProps> = ({
                   <button
                     type="button"
                     onClick={handleRegisterCurrent}
-                    disabled={isSavingCurrent || currentItem.decision === 'registered'}
+                    disabled={isSavingCurrent || isSavingAll || currentItem.decision === 'registered'}
                     className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold shadow-xs transition cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
                   >
                     {isSavingCurrent ? (

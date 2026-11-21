@@ -56,6 +56,11 @@ export interface Asset {
   creditAccount: string;
   assetAccount: string;
   status: 'ativo' | 'baixado' | 'totalmente_depreciado' | 'em_manutencao';
+  initialAccumulatedDepreciation?: number;
+  initialAccumulatedDepreciationDate?: string; // YYYY-MM-DD
+  assetGroup?: string;
+  assetClass?: string;
+  postToTrialBalance?: boolean;
   disposalDate?: string;
   disposalReason?: string;
   salePrice?: number;
@@ -275,11 +280,24 @@ export interface ExtractedAssetCandidate {
   category: Asset['category'];
   categoryLabel: string;
   acquisitionDate: string; // YYYY-MM-DD
+  depreciationStartDate?: string; // YYYY-MM-DD
+  acquisitionYear?: number;
+  assetGroup?: string;
+  assetClass?: string;
+  marking?: string;
+  postToTrialBalance?: boolean;
+  status?: Asset['status'];
   acquisitionValue: number;
   residualValue: number;
   accumulatedDepreciation?: number;
+  accumulatedDepreciationDate?: string; // YYYY-MM-DD
+  accumulatedDepreciationMonths?: number;
+  lastPeriodQuota?: number;
+  netBookValueImported?: number;
+  depreciationHistoryNote?: string;
   annualRate: number;
   usefulLifeMonths: number;
+  usefulLifeYears?: number;
   costCenter: string;
   location: string;
   supplier: string;
