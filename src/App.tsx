@@ -28,6 +28,7 @@ import {
   subscribeToAuth,
   saveCompanyToFirestore,
   fetchCompaniesFromFirestore,
+  fetchAssetsFromFirestore,
   saveAssetToFirestore,
   deleteAssetFromFirestore,
   saveStatementToFirestore,
@@ -438,18 +439,84 @@ export default function App() {
     }
   }, [fetchWithRetry]);
 
-  // 2. Fetch Assets for current company (Data Isolation)
+  // 2. Fetch Assets for current company (Merges API + Firestore + Cache with Tombstones)
   const fetchAssets = useCallback(async () => {
-    if (!currentCompany.id) return;
+    const companyId = currentCompany.id;
+    if (!companyId) return;
+
+    let apiAssets: Asset[] = [];
     try {
-      const res = await fetchWithRetry(`/api/assets?companyId=${currentCompany.id}`);
+      const res = await fetchWithRetry(`/api/assets?companyId=${companyId}`);
       const data = await safeJson<Asset[]>(res);
       if (data && Array.isArray(data)) {
-        setAssets(data);
+        apiAssets = data;
       }
     } catch (err) {
-      console.warn('Could not fetch assets right now:', err);
+      console.warn('Could not fetch assets from API right now:', err);
     }
+
+    let firestoreAssets: Asset[] = [];
+    try {
+      firestoreAssets = await fetchAssetsFromFirestore(companyId);
+    } catch (err) {
+      console.warn('Could not fetch assets from Firestore:', err);
+    }
+
+    let localAssets: Asset[] = [];
+    try {
+      const raw = localStorage.getItem(`contsuite_cached_assets_${companyId}`);
+      if (raw) localAssets = JSON.parse(raw);
+    } catch {}
+
+    let deletedIds = new Set<string>();
+    try {
+      const rawDel = localStorage.getItem(`contsuite_deleted_assets_${companyId}`);
+      if (rawDel) deletedIds = new Set<string>(JSON.parse(rawDel));
+    } catch {}
+
+    // Also sync Firestore assets to backend /api/assets/sync to retrieve server tombstones
+    const candidateForSync = firestoreAssets.filter((a) => a && a.id && !deletedIds.has(a.id));
+    if (candidateForSync.length > 0) {
+      try {
+        const syncRes = await fetch('/api/assets/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ companyId, assets: candidateForSync }),
+        });
+        const syncJson = await safeJson<{ assets?: Asset[]; deletedIds?: string[] }>(syncRes);
+        if (syncJson?.deletedIds) {
+          syncJson.deletedIds.forEach((did) => deletedIds.add(did));
+          try {
+            localStorage.setItem(
+              `contsuite_deleted_assets_${companyId}`,
+              JSON.stringify(Array.from(deletedIds).slice(0, 300))
+            );
+          } catch {}
+        }
+        if (Array.isArray(syncJson?.assets)) {
+          apiAssets = syncJson.assets;
+        }
+      } catch {}
+    }
+
+    const map = new Map<string, Asset>();
+    [...localAssets, ...firestoreAssets, ...apiAssets].forEach((a) => {
+      if (!a || !a.id) return;
+      if (deletedIds.has(a.id)) return;
+      if (a.companyId && a.companyId !== companyId) return;
+      map.set(a.id, { ...map.get(a.id), ...a, companyId });
+    });
+
+    const merged = Array.from(map.values()).sort((a, b) => {
+      const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return tb - ta;
+    });
+
+    setAssets(merged);
+    try {
+      localStorage.setItem(`contsuite_cached_assets_${companyId}`, JSON.stringify(merged));
+    } catch {}
   }, [currentCompany.id, fetchWithRetry]);
 
   // 3. Fetch Depreciation Summary for current company & month
@@ -894,17 +961,20 @@ export default function App() {
 
   // Asset actions (Dual save to backend and Firebase Firestore)
   const handleSaveAsset = async (assetData: Partial<Asset>) => {
+    const targetCompanyId = assetData.companyId || currentCompany.id;
+    const payload = { ...assetData, companyId: targetCompanyId };
+
     if (assetToEdit) {
       const res = await fetch(`/api/assets/${assetToEdit.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(assetData),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error('Falha ao atualizar bem');
       const updated = await res.json();
-      
+
       try {
-        await saveAssetToFirestore(currentCompany.id, updated);
+        await saveAssetToFirestore(targetCompanyId, updated);
       } catch (e) {
         console.warn('Firestore sync asset warning:', e);
       }
@@ -913,17 +983,20 @@ export default function App() {
       const res = await fetch('/api/assets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(assetData),
+        body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error('Falha ao cadastrar bem');
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.error || 'Falha ao cadastrar bem');
+      }
       const created = await res.json();
 
       try {
-        await saveAssetToFirestore(currentCompany.id, created);
+        await saveAssetToFirestore(targetCompanyId, created);
       } catch (e) {
         console.warn('Firestore sync asset warning:', e);
       }
-      showToast('Novo bem imobilizado cadastrado no Firebase Firestore!');
+      showToast('Novo bem imobilizado cadastrado com sucesso!');
     }
     await fetchAssets();
     await fetchDepreciation();
@@ -931,20 +1004,48 @@ export default function App() {
   };
 
   const handleDeleteAsset = async (id: string) => {
-    try {
-      const res = await fetch(`/api/assets/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Falha ao excluir ativo');
-      
+    const targetAsset = assets.find((a) => a.id === id);
+    const targetCompanyId = targetAsset?.companyId || currentCompany.id;
+
+    // 1. Optimistic local removal + tombstone so UI responds cleanly and never resurrects
+    setAssets((prev) => prev.filter((a) => a.id !== id));
+    if (targetCompanyId) {
       try {
-        await deleteAssetFromFirestore(currentCompany.id, id);
-      } catch (e) {
-        console.warn('Firestore delete asset warning:', e);
+        const cacheKey = `contsuite_cached_assets_${targetCompanyId}`;
+        const raw = localStorage.getItem(cacheKey);
+        if (raw) {
+          const next = (JSON.parse(raw) as Asset[]).filter((a) => a.id !== id);
+          localStorage.setItem(cacheKey, JSON.stringify(next));
+        }
+        const delKey = `contsuite_deleted_assets_${targetCompanyId}`;
+        const rawDel = localStorage.getItem(delKey);
+        const delArr: string[] = rawDel ? JSON.parse(rawDel) : [];
+        if (!delArr.includes(id)) {
+          localStorage.setItem(delKey, JSON.stringify([id, ...delArr].slice(0, 300)));
+        }
+      } catch {}
+    }
+
+    try {
+      const res = await fetch(`/api/assets/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (!res.ok && res.status !== 404) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || 'Falha ao excluir ativo no servidor');
       }
-      showToast('Ativo excluído do inventário e do Firebase.');
+
+      if (targetCompanyId) {
+        try {
+          await deleteAssetFromFirestore(targetCompanyId, id);
+        } catch (e) {
+          console.warn('Firestore delete asset warning:', e);
+        }
+      }
+      showToast('Ativo excluído definitivamente do inventário e do Firebase.');
       await fetchAssets();
       await fetchDepreciation();
     } catch (err: any) {
       showToast(err.message || 'Erro ao excluir ativo', 'error');
+      await fetchAssets();
     }
   };
 

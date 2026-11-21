@@ -196,6 +196,7 @@ export interface SystemData {
   accounts: ChartAccount[];
   documents: CompanyDocument[];
   deletedDocumentIds?: string[];
+  deletedAssetIds?: string[];
 }
 
 const isVercel = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
@@ -238,6 +239,7 @@ const INITIAL_DATA: SystemData = {
   payments: [],
   documents: [],
   deletedDocumentIds: [],
+  deletedAssetIds: [],
   accounts: [
     { id: 'acc-1', companyId: 'comp-master', code: '1.1.1.02.0001', name: 'Banco Itaú Unibanco S/A c/c', type: 'analitica', nature: 'devedora', group: 'ativo', categoryTag: 'banco', level: 5, createdAt: '2026-01-01T08:00:00.000Z' },
     { id: 'acc-2', companyId: 'comp-master', code: '1.1.1.02.0002', name: 'Banco Bradesco S/A c/c', type: 'analitica', nature: 'devedora', group: 'ativo', categoryTag: 'banco', level: 5, createdAt: '2026-01-01T08:00:00.000Z' },
@@ -296,6 +298,7 @@ export function loadDb(): SystemData {
         accounts: parsed.accounts || INITIAL_DATA.accounts,
         documents: parsed.documents || INITIAL_DATA.documents,
         deletedDocumentIds: Array.isArray(parsed.deletedDocumentIds) ? parsed.deletedDocumentIds : [],
+        deletedAssetIds: Array.isArray(parsed.deletedAssetIds) ? parsed.deletedAssetIds : [],
       };
       return memoryDb;
     }
@@ -512,27 +515,44 @@ export function deleteUser(id: string) {
   return null;
 }
 
+export function getDeletedAssetIds(): string[] {
+  const db = loadDb();
+  return Array.isArray(db.deletedAssetIds) ? db.deletedAssetIds : [];
+}
+
 export function getAssets(companyId?: string) {
   const db = loadDb();
+  const delSet = new Set(db.deletedAssetIds || []);
+  const activeAssets = (db.assets || []).filter(a => a && !delSet.has(a.id));
   if (companyId && companyId !== 'all') {
-    return db.assets.filter(a => a.companyId === companyId);
+    return activeAssets.filter(a => a.companyId === companyId);
   }
-  return db.assets;
+  return activeAssets;
 }
 
 export function getAssetById(id: string) {
-  return loadDb().assets.find(a => a.id === id);
+  const db = loadDb();
+  if ((db.deletedAssetIds || []).includes(id)) return undefined;
+  return (db.assets || []).find(a => a.id === id);
 }
 
-export function createAsset(asset: Omit<Asset, 'id' | 'createdAt' | 'updatedAt' | 'depreciableValue' | 'monthlyRate'>) {
+export function createAsset(asset: Omit<Asset, 'id' | 'createdAt' | 'updatedAt' | 'depreciableValue' | 'monthlyRate'> & { id?: string }) {
   const db = loadDb();
-  const depreciableValue = Math.max(0, asset.acquisitionValue - (asset.residualValue || 0));
-  const monthlyRate = (asset.annualRate || 0) / 12;
+  const depreciableValue = Math.max(0, Number(asset.acquisitionValue || 0) - Number(asset.residualValue || 0));
+  const monthlyRate = Number(asset.annualRate || 0) / 12;
   const now = new Date().toISOString();
-  
+  const validId =
+    asset.id && /^[a-zA-Z0-9_-]{3,128}$/.test(asset.id)
+      ? asset.id
+      : 'ast-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 10000);
+
+  if (Array.isArray(db.deletedAssetIds) && db.deletedAssetIds.includes(validId)) {
+    db.deletedAssetIds = db.deletedAssetIds.filter(d => d !== validId);
+  }
+
   const newAsset: Asset = {
     ...asset,
-    id: 'ast-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1000),
+    id: validId,
     depreciableValue,
     monthlyRate,
     createdAt: now,
@@ -568,19 +588,29 @@ export function updateAsset(id: string, updates: Partial<Asset>) {
   return null;
 }
 
-export function deleteAsset(id: string) {
+export function deleteAsset(id: string): { removed: boolean; tombstoned: boolean } {
   const db = loadDb();
+  if (!db.assets) db.assets = [];
+  if (!db.deletedAssetIds) db.deletedAssetIds = [];
+
   const initialLen = db.assets.length;
   db.assets = db.assets.filter(a => a.id !== id);
-  if (db.assets.length !== initialLen) {
-    saveDb(db);
-    return true;
+  const removed = db.assets.length !== initialLen;
+
+  const alreadyTombstoned = db.deletedAssetIds.includes(id);
+  if (id && !alreadyTombstoned) {
+    db.deletedAssetIds = [id, ...db.deletedAssetIds].slice(0, 1000);
   }
-  return false;
+
+  if (removed || !alreadyTombstoned) {
+    saveDb(db);
+  }
+  return { removed, tombstoned: Boolean(id) };
 }
 
 export function upsertAsset(asset: Partial<Asset> & { id: string; companyId: string }) {
   const db = loadDb();
+  if ((db.deletedAssetIds || []).includes(asset.id)) return null;
   const idx = db.assets.findIndex(a => a.id === asset.id);
   const now = new Date().toISOString();
   if (idx !== -1) {
@@ -941,6 +971,7 @@ export function restoreBackup(payload: any) {
     accounts: dataToRestore.accounts || [],
     documents: dataToRestore.documents || [],
     deletedDocumentIds: Array.isArray(dataToRestore.deletedDocumentIds) ? dataToRestore.deletedDocumentIds : [],
+    deletedAssetIds: Array.isArray(dataToRestore.deletedAssetIds) ? dataToRestore.deletedAssetIds : [],
   };
 
   saveDb(restored);
@@ -1007,6 +1038,7 @@ export function clearDemoData(adminEmail: string = 'rodrigobento1979@gmail.com')
     accounts: db.accounts && db.accounts.length > 0 ? db.accounts : INITIAL_DATA.accounts,
     documents: [],
     deletedDocumentIds: [],
+    deletedAssetIds: [],
   };
 
   saveDb(cleaned);

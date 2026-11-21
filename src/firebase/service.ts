@@ -119,32 +119,40 @@ export async function fetchAssetsFromFirestore(companyId: string): Promise<Asset
     const snap = await getDocs(collection(db, 'companies', companyId, 'assets'));
     const list: Asset[] = [];
     snap.forEach((d) => {
-      list.push({ id: d.id, ...d.data() } as Asset);
+      list.push({ id: d.id, ...d.data(), companyId } as Asset);
     });
     return list;
   } catch (error) {
-    handleFirestoreError(error, OperationType.GET, path);
+    console.warn('Firestore fetchAssets warning:', error);
     return [];
   }
 }
 
 export async function saveAssetToFirestore(companyId: string, asset: Asset): Promise<void> {
-  if (!auth.currentUser || !companyId) return;
+  if (!auth.currentUser || !companyId || !asset?.id) return;
+  if (!/^[a-zA-Z0-9_-]{3,128}$/.test(asset.id)) return;
   const path = `companies/${companyId}/assets/${asset.id}`;
   try {
-    await setDoc(doc(db, 'companies', companyId, 'assets', asset.id), stripUndefinedDeep(asset), { merge: true });
+    await setDoc(doc(db, 'companies', companyId, 'assets', asset.id), stripUndefinedDeep({ ...asset, companyId }), { merge: true });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
 
-export async function deleteAssetFromFirestore(companyId: string, assetId: string): Promise<void> {
-  if (!auth.currentUser || !companyId) return;
+export async function deleteAssetFromFirestore(companyId: string, assetId: string): Promise<boolean> {
+  if (!auth.currentUser || !companyId || !assetId) return false;
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(assetId)) return false;
   const path = `companies/${companyId}/assets/${assetId}`;
   try {
     await deleteDoc(doc(db, 'companies', companyId, 'assets', assetId));
-  } catch (error) {
+    return true;
+  } catch (error: any) {
+    const code = String(error?.code || '');
+    if (code === 'not-found') {
+      return true;
+    }
     handleFirestoreError(error, OperationType.DELETE, path);
+    return false;
   }
 }
 

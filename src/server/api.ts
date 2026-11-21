@@ -12,9 +12,11 @@ import {
   updateUser,
   deleteUser,
   getAssets,
+  getDeletedAssetIds,
   getAssetById,
   createAsset,
   updateAsset,
+  upsertAsset,
   deleteAsset,
   getStatements,
   getStatementById,
@@ -63,6 +65,7 @@ import {
   suggestAssetClassificationWithAI,
   StatementExtractionResult,
 } from './ofx-ai.ts';
+import { analyzeAssetFileWithAI } from './asset-ai.ts';
 import { askContSuiteAgent } from './guide-ai.ts';
 import {
   sendEmail,
@@ -948,13 +951,54 @@ apiRouter.put('/assets/:id', (req: Request, res: Response) => {
 apiRouter.delete('/assets/:id', (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const success = deleteAsset(id);
-    if (!success) {
-      return res.status(404).json({ error: 'Ativo não encontrado.' });
-    }
-    return res.json({ success: true });
+    const result = deleteAsset(id);
+    return res.json({
+      success: true,
+      removedFromServer: result.removed,
+      tombstoned: result.tombstoned,
+    });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/assets/sync', (req: Request, res: Response) => {
+  try {
+    const { companyId, assets: incoming } = req.body || {};
+    const deletedSet = new Set(getDeletedAssetIds());
+    if (Array.isArray(incoming)) {
+      incoming.forEach((a: any) => {
+        if (a && a.id && (a.companyId || companyId) && !deletedSet.has(a.id)) {
+          upsertAsset({ ...a, companyId: a.companyId || companyId });
+        }
+      });
+    }
+    return res.json({
+      success: true,
+      assets: getAssets(companyId as string),
+      deletedIds: Array.from(deletedSet),
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// IA extraction of multi-sheet spreadsheets (including summary tabs), PDFs, images, and XMLs for step-by-step review
+apiRouter.post('/assets/analyze-file', async (req: Request, res: Response) => {
+  try {
+    const { fileName, mimeType, base64Data } = req.body || {};
+    if (!base64Data || !fileName) {
+      return res.status(400).json({ error: 'Arquivo (fileName e base64Data) é obrigatório para análise com IA.' });
+    }
+    const result = await analyzeAssetFileWithAI({
+      fileName: String(fileName),
+      mimeType: String(mimeType || 'application/octet-stream'),
+      base64Data: String(base64Data),
+    });
+    return res.json(result);
+  } catch (err: any) {
+    console.error('Error analyzing asset file with AI:', err);
+    return res.status(500).json({ error: err.message || 'Falha ao analisar arquivo do ativo com IA.' });
   }
 });
 

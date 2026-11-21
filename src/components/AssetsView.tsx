@@ -30,7 +30,8 @@ import {
   HelpCircle,
   X,
   Printer,
-  Upload
+  Upload,
+  Loader2
 } from 'lucide-react';
 import { 
   Asset, 
@@ -89,10 +90,12 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
   const [isSubmittingDisposal, setIsSubmittingDisposal] = useState(false);
   const [disposalResult, setDisposalResult] = useState<AssetDisposalCalculation | null>(null);
 
-  // Feedback Toast
+  // Feedback Toast & Delete Confirmation
   const [actionMessage, setActionMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [copiedFormat, setCopiedFormat] = useState<string | null>(null);
   const [showReportModal, setShowReportModal] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deletingAssetId, setDeletingAssetId] = useState<string | null>(null);
 
   const inventoryReportColumns: ReportColumn[] = [
     { key: 'tagNumber', label: 'Plaqueta', align: 'left' },
@@ -265,7 +268,11 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
           }`}
         >
           <div className="flex items-center gap-2">
-            <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+            {actionMessage.type === 'success' ? (
+              <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+            ) : (
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+            )}
             <span className="font-semibold">{actionMessage.text}</span>
           </div>
           <button onClick={() => setActionMessage(null)} className="text-[11px] underline font-bold cursor-pointer">
@@ -514,33 +521,66 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
 
                       <td className="py-2.5 px-3 text-right whitespace-nowrap">
                         <div className="flex items-center justify-end gap-1">
-                          {asset.status !== 'baixado' && (
-                            <button
-                              onClick={() => {
-                                setAssetToDispose(asset);
-                                setShowDisposalModal(true);
-                                setDisposalResult(null);
-                              }}
-                              className="px-2 py-1 rounded bg-rose-50 text-rose-700 hover:bg-rose-100 text-[10px] font-bold transition cursor-pointer"
-                              title="Efetuar baixa do bem e calcular ganho/perda de capital"
-                            >
-                              Baixar
-                            </button>
+                          {confirmDeleteId === asset.id ? (
+                            <div className="flex items-center gap-1 bg-rose-50 border border-rose-200 rounded-lg px-1.5 py-0.5">
+                              <span className="text-[10px] font-bold text-rose-800 mr-1">Excluir?</span>
+                              <button
+                                onClick={async () => {
+                                  if (deletingAssetId) return;
+                                  setDeletingAssetId(asset.id);
+                                  try {
+                                    await onDeleteAsset(asset.id);
+                                    setConfirmDeleteId(null);
+                                  } finally {
+                                    setDeletingAssetId(null);
+                                  }
+                                }}
+                                disabled={deletingAssetId === asset.id}
+                                className="px-2 py-0.5 rounded bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold transition cursor-pointer disabled:opacity-50 flex items-center gap-1"
+                              >
+                                {deletingAssetId === asset.id && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
+                                Sim
+                              </button>
+                              <button
+                                onClick={() => setConfirmDeleteId(null)}
+                                disabled={deletingAssetId === asset.id}
+                                className="px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-600 hover:bg-slate-100 text-[10px] font-semibold transition cursor-pointer"
+                              >
+                                Não
+                              </button>
+                            </div>
+                          ) : (
+                            <>
+                              {asset.status !== 'baixado' && (
+                                <button
+                                  onClick={() => {
+                                    setAssetToDispose(asset);
+                                    setShowDisposalModal(true);
+                                    setDisposalResult(null);
+                                  }}
+                                  className="px-2 py-1 rounded bg-rose-50 text-rose-700 hover:bg-rose-100 text-[10px] font-bold transition cursor-pointer"
+                                  title="Efetuar baixa do bem e calcular ganho/perda de capital"
+                                >
+                                  Baixar
+                                </button>
+                              )}
+                              <button
+                                onClick={() => onEditAsset(asset)}
+                                className="p-1 text-slate-400 hover:text-slate-700 transition cursor-pointer"
+                                title="Editar bem"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => setConfirmDeleteId(asset.id)}
+                                disabled={deletingAssetId === asset.id}
+                                className="p-1 text-slate-400 hover:text-rose-600 transition cursor-pointer disabled:opacity-40"
+                                title="Excluir bem"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </>
                           )}
-                          <button
-                            onClick={() => onEditAsset(asset)}
-                            className="p-1 text-slate-400 hover:text-slate-700 transition cursor-pointer"
-                            title="Editar bem"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => onDeleteAsset(asset.id)}
-                            className="p-1 text-slate-400 hover:text-rose-600 transition cursor-pointer"
-                            title="Excluir bem"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
                         </div>
                       </td>
                     </tr>

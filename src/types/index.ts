@@ -268,6 +268,45 @@ export interface CompanyDocument {
   sourceGroupLabel?: string;
 }
 
+export interface ExtractedAssetCandidate {
+  tempId: string;
+  description: string;
+  tagNumber: string;
+  category: Asset['category'];
+  categoryLabel: string;
+  acquisitionDate: string; // YYYY-MM-DD
+  acquisitionValue: number;
+  residualValue: number;
+  accumulatedDepreciation?: number;
+  annualRate: number;
+  usefulLifeMonths: number;
+  costCenter: string;
+  location: string;
+  supplier: string;
+  invoiceNumber: string;
+  debitAccount?: string;
+  creditAccount?: string;
+  assetAccount?: string;
+  sourceSheet?: string;
+  sourceRow?: number;
+  quantity?: number;
+  isSummaryEntry?: boolean;
+  confidence?: number;
+  aiReason?: string;
+  notes?: string;
+}
 
-
-
+export interface AssetExtractionResponse {
+  fileName: string;
+  fileType: 'spreadsheet' | 'pdf' | 'image' | 'xml' | 'text';
+  sheetsAnalyzed: {
+    name: string;
+    rowCount: number;
+    isSummarySheet: boolean;
+  }[];
+  candidates: ExtractedAssetCandidate[];
+  usedAi: boolean;
+  usedFallback?: boolean;
+  aiWarning?: string;
+  summaryText: string;
+}
