@@ -23,6 +23,7 @@ import {
   Camera,
   CheckCircle,
   Trash2,
+  FileText,
 } from 'lucide-react';
 import { AppNavTab } from './Sidebar';
 
@@ -178,45 +179,33 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
   const novidades = [
     {
       icon: Building2,
-      badge: 'Novo na v1.2',
-      title: 'Importador Inteligente de Ativos (Planilhas & Dep. Acumulada)',
-      desc: 'Leitura integral da 1ª aba de planilhas do imobilizado com captura de Grupo, Classe, Vida Útil, Situação, Contas Contábeis e Depreciação Acumulada anterior, permitindo revisar e cadastrar um a um com fallback determinístico.',
+      badge: 'Novo na v1.3',
+      title: 'Ficha do Bem Individual (Ficha Patrimonial Completa)',
+      desc: 'Relatório individual bem a bem que exibe todos os dados cadastrais (Tombo, Descrição, Categoria CPC 27, Datas, Valores de Aquisição e Residual) bem como o histórico detalhado de movimentações e quotas de depreciação.',
     },
     {
-      icon: FolderTree,
-      badge: 'Novo na v1.2',
-      title: 'Arquivamento Automático por Empresa & CNPJ no Explorador',
-      desc: 'Ao importar, digitalizar ou receber arquivos (inclusive XMLs de NF-e com tag <CNPJ>), o sistema identifica automaticamente CNPJ e Razão Social/Fantasia e arquiva na pasta [Nome] - [CNPJ] correspondente, com contador de arquivos por pasta e selo de CNPJ nos cards.',
+      icon: FileText,
+      badge: 'Novo na v1.3',
+      title: 'Posição Atualizada de Bens & Mapa de Depreciação',
+      desc: 'Relatórios avançados com métricas de patrimônio, VCL, depreciação acumulada até a data de emissão e mapa por período (mensal, trimestral ou anual) com cotas e saldos finais.',
+    },
+    {
+      icon: Landmark,
+      badge: 'Novo na v1.3',
+      title: 'Integração Padrão com Empresa AVR (comp-avr-01)',
+      desc: 'Configuração otimizada para o usuário SSCONT (secsscont@gmail.com) com pré-seleção automática da empresa AVR Indústria e Comércio Ltda e isolamento estrito de ativos.',
+    },
+    {
+      icon: Building2,
+      badge: 'Atualizado v1.3',
+      title: 'Leitor IA de Planilhas Multi-Abas (Analíticas & Resumidas)',
+      desc: 'Identificação inteligente de abas analíticas e resumidas com exclusão, reenvio e cadastro item por item sem inconsistências ou erros de leitura.',
     },
     {
       icon: Trash2,
-      badge: 'Novo na v1.2',
-      title: 'Exclusão Definitiva no Banco, Nuvem & Cache Local',
-      desc: 'A exclusão de documentos agora remove metadados e todos os fragmentos binários (chunks) no Firestore, servidor e IndexedDB, com registro de remoção (tombstones) entre dispositivos para que arquivos apagados nunca retornem após recarregar ou sincronizar.',
-    },
-    {
-      icon: Eye,
-      badge: 'Melhoria v1.2',
-      title: 'Pré-visualização Cross-Device & Sincronização de Sessão',
-      desc: 'Arquivos enviados pelo computador ou câmera do celular sincronizam fragmentos binários para abertura em qualquer dispositivo, com validação de acesso por UID Firebase e controle rigoroso das empresas permitidas.',
-    },
-    {
-      icon: Camera,
-      badge: 'Melhoria v1.2',
-      title: 'Câmera Mobile & PDF Ultracomprimido Automático',
-      desc: 'Toda foto tirada pela câmera ou enviada via upload é redimensionada, contrastada e convertida em PDF ultracomprimido (~85 KB/pág.) com sincronização instantânea e botões protegidos das barras do celular.',
-    },
-    {
-      icon: Sparkles,
-      badge: 'OFX & Lote',
-      title: 'Notas Fiscais → OFX & Seletor Múltiplo (Radio)',
-      desc: 'Processe ou reprocesse Notas Fiscais (XML, PDF ou foto) direto para o Conversor OFX ou selecione vários arquivos pelo seletor circular (radio) para gerar 1 único arquivo OFX consolidado.',
-    },
-    {
-      icon: Inbox,
-      badge: 'Automação',
-      title: 'Recebimento Automático por E-mail com Roteamento CNPJ',
-      desc: 'Anexos enviados para contsuitesistemas@gmail.com são importados automaticamente para a pasta da empresa correta (por e-mail, CNPJ ou nome) com separação IA de PDFs mistos e geração de OFX.',
+      badge: 'v1.3',
+      title: 'Exclusão Sincronizada & Auditoria de Inconsistências',
+      desc: 'Remoção e re-lançamento de bens com auditoria automática de duplicidade, exclusão em lote e sincronização perfeita entre banco, nuvem e cache local.',
     },
   ];
 
@@ -241,11 +230,11 @@ export const HelpCenterModal: React.FC<HelpCenterModalProps> = ({
                   Central de Ajuda & Manual do Sistema
                 </h2>
                 <span className="px-2 py-0.5 rounded-md bg-amber-400 text-slate-950 text-[10px] font-black tracking-wide uppercase">
-                  Versão 1.2
+                  Versão 1.3
                 </span>
               </div>
               <p className="text-[11px] sm:text-xs text-teal-100 truncate">
-                Guia completo das funcionalidades, novidades da versão 1.2 e recebimento por e-mail
+                Guia completo das funcionalidades, Ficha do Bem, relatórios e novidades da versão 1.3
               </p>
             </div>
           </div>

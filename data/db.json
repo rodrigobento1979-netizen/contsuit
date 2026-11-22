@@ -25,7 +25,7 @@
       "name": "SSCONT - MARILZA",
       "email": "secsscont@gmail.com",
       "role": "accountant",
-      "companyId": "comp-mwns4db0",
+      "companyId": "comp-avr-01",
       "status": "active",
       "invitationToken": "inv-kqvlt2ju-mwnscfes",
       "invitedAt": "2026-11-19T16:49:36.004Z",
@@ -67,12 +67,12 @@
       "createdAt": "2026-11-08T11:13:54.105Z"
     },
     {
-      "id": "comp-mwnyagyf",
-      "name": "SSCONT",
-      "cnpj": "00.000.000/0001-00",
-      "fantasyName": "SSCONT",
+      "id": "comp-avr-01",
+      "name": "AVR Indústria e Comércio Ltda",
+      "cnpj": "57.152.999/0001-01",
+      "fantasyName": "AVR",
       "contactEmail": "secsscont@gmail.com",
-      "phone": "",
+      "phone": "(11) 99999-8888",
       "accountingSystem": "dominio",
       "chartOfAccounts": {
         "assetDefaultAccount": "1.2.3.01.0001",

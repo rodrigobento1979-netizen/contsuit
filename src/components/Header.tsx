@@ -9,7 +9,7 @@ import {
   Bot
 } from 'lucide-react';
 import { User, Company } from '../types';
-import { isMasterUser } from '../utils/auth';
+import { isMasterUser, filterCompaniesForUser } from '../utils/auth';
 
 interface HeaderProps {
   currentUser: User;
@@ -83,40 +83,43 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Right: Company Switcher, Cloud Status & User Session */}
         <div className="flex items-center gap-1.5 sm:gap-3 text-xs shrink-0">
-          {/* Active Company Selector (Strictly Master Admin only; non-Master sees fixed logged-in company) */}
-          {isMaster ? (
-            <div
-              className="flex items-center gap-1.5 bg-black/20 px-2 sm:px-2.5 py-1 rounded-xl border border-white/15"
-              title={`Acesso amplo Administrador Master: ${allCompanies.length} empresas disponíveis`}
-            >
-              <Building2 className="w-3.5 h-3.5 text-[#80cbc4] shrink-0" />
-              <label htmlFor="top-company-select" className="text-[#e0f2f1] font-medium hidden md:inline text-[11px]">
-                Empresa ({allCompanies.length}):
-              </label>
-              <select
-                id="top-company-select"
-                value={currentCompany?.id || ''}
-                onChange={(e) => onSwitchCompany(e.target.value)}
-                className="bg-[#004d40] text-white font-bold border border-[#00bfa5]/40 rounded-lg px-1.5 sm:px-2 py-0.5 text-[11px] sm:text-xs focus:outline-none focus:ring-1 focus:ring-[#80cbc4] cursor-pointer max-w-[115px] sm:max-w-[210px] truncate"
+          {/* Active Company Selector (Filtered strictly to companies registered within the user account) */}
+          {(() => {
+            const userCompanies = filterCompaniesForUser(allCompanies, currentUser);
+            return userCompanies.length > 0 ? (
+              <div
+                className="flex items-center gap-1.5 bg-black/20 px-2 sm:px-2.5 py-1 rounded-xl border border-white/15"
+                title={`Empresas disponíveis na conta: ${userCompanies.length}`}
               >
-                {allCompanies.map((c) => (
-                  <option key={c.id} value={c.id} className="bg-slate-900 text-white">
-                    {c.fantasyName || c.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : currentCompany ? (
-            <div
-              className="hidden sm:flex items-center gap-1.5 bg-black/20 px-2.5 py-1 rounded-xl border border-white/15"
-              title="Empresa vinculada ao seu usuário"
-            >
-              <Building2 className="w-3.5 h-3.5 text-[#80cbc4]" />
-              <span className="text-white font-bold text-xs truncate max-w-[190px]">
-                {currentCompany.fantasyName || currentCompany.name}
-              </span>
-            </div>
-          ) : null}
+                <Building2 className="w-3.5 h-3.5 text-[#80cbc4] shrink-0" />
+                <label htmlFor="top-company-select" className="text-[#e0f2f1] font-medium hidden md:inline text-[11px]">
+                  Empresa{userCompanies.length > 1 ? ` (${userCompanies.length})` : ''}:
+                </label>
+                <select
+                  id="top-company-select"
+                  value={currentCompany?.id || ''}
+                  onChange={(e) => onSwitchCompany(e.target.value)}
+                  className="bg-[#004d40] text-white font-bold border border-[#00bfa5]/40 rounded-lg px-1.5 sm:px-2 py-0.5 text-[11px] sm:text-xs focus:outline-none focus:ring-1 focus:ring-[#80cbc4] cursor-pointer max-w-[125px] sm:max-w-[210px] truncate"
+                >
+                  {userCompanies.map((c) => (
+                    <option key={c.id} value={c.id} className="bg-slate-900 text-white">
+                      {c.fantasyName || c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : currentCompany ? (
+              <div
+                className="hidden sm:flex items-center gap-1.5 bg-black/20 px-2.5 py-1 rounded-xl border border-white/15"
+                title="Empresa vinculada ao seu usuário"
+              >
+                <Building2 className="w-3.5 h-3.5 text-[#80cbc4]" />
+                <span className="text-white font-bold text-xs truncate max-w-[190px]">
+                  {currentCompany.fantasyName || currentCompany.name}
+                </span>
+              </div>
+            ) : null;
+          })()}
 
           {/* Firebase Cloud Status Chip */}
           <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-black/15 border border-white/10 text-[11px] text-[#e0f2f1]">

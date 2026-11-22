@@ -41,6 +41,7 @@ import {
   AssetDisposalCalculation 
 } from '../types';
 import { ReportPrintModal, ReportColumn } from './ReportPrintModal';
+import { AssetFichaModal } from './AssetFichaModal';
 
 interface AssetsViewProps {
   assets: Asset[];
@@ -155,7 +156,9 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
   // Feedback Toast, Batch Selection & Delete Confirmation
   const [actionMessage, setActionMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [copiedFormat, setCopiedFormat] = useState<string | null>(null);
-  const [showReportModal, setShowReportModal] = useState(false);
+  const [activeReportModal, setActiveReportModal] = useState<'inventario' | 'posicao_atualizada' | 'mapa_depreciacao' | null>(null);
+  const [showFichaModal, setShowFichaModal] = useState(false);
+  const [fichaAssetId, setFichaAssetId] = useState<string | undefined>(undefined);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deletingAssetId, setDeletingAssetId] = useState<string | null>(null);
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
@@ -180,6 +183,27 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
         </span>
       )
     },
+  ];
+
+  const posicaoAtualizadaReportColumns: ReportColumn[] = [
+    { key: 'tagNumber', label: 'Patrimônio', align: 'left' },
+    { key: 'description', label: 'Nome / Descrição do Bem', align: 'left' },
+    { key: 'acquisitionDate', label: 'Aquisição', align: 'center', format: (val) => val ? String(val).split('-').reverse().join('/') : '-' },
+    { key: 'acquisitionValue', label: 'Valor Original Compra (R$)', align: 'right', format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
+    { key: 'currentAccumulatedDepreciation', label: 'Deprec. Acumulada (Até Emissão) (R$)', align: 'right', format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
+    { key: 'netBookValue', label: 'Saldo Residual (VCL) (R$)', align: 'right', format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
+    { key: 'annualRate', label: 'Taxa Deprec. (% a.a.)', align: 'center', format: (val) => `${val}% a.a.` },
+  ];
+
+  const mapaDepreciacaoReportColumns: ReportColumn[] = [
+    { key: 'tagNumber', label: 'Patrimônio', align: 'left' },
+    { key: 'description', label: 'Descrição do Bem', align: 'left' },
+    { key: 'acquisitionValue', label: 'Valor Aquisição (R$)', align: 'right', format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
+    { key: 'depreciableValue', label: 'Valor a Depreciar (R$)', align: 'right', format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
+    { key: 'previousAccumulatedDepreciation', label: 'Deprec. Acum. Anterior (R$)', align: 'right', format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
+    { key: 'periodDepreciation', label: `Cota do Período (${periodType.toUpperCase()}) (R$)`, align: 'right', format: (val, row) => `R$ ${Number(val || row.monthlyDepreciation || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
+    { key: 'currentAccumulatedDepreciation', label: 'Deprec. Acum. Atual (R$)', align: 'right', format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
+    { key: 'netBookValue', label: 'Saldo Final a Depreciar (R$)', align: 'right', format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
   ];
 
   const showMsg = (text: string, type: 'success' | 'error' = 'success') => {
@@ -460,12 +484,42 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
 
         <div className="flex items-center gap-2 shrink-0">
           <button
-            onClick={() => setShowReportModal(true)}
+            onClick={() => setActiveReportModal('inventario')}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold shadow-2xs transition cursor-pointer"
             title="Emitir relatório geral do inventário de bens"
           >
             <Printer className="w-4 h-4 text-teal-700" />
-            <span>Emitir Relatório</span>
+            <span>Emitir Inventário</span>
+          </button>
+
+          <button
+            onClick={() => setActiveReportModal('posicao_atualizada')}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-teal-200 bg-teal-50 hover:bg-teal-100 text-teal-900 text-xs font-bold shadow-2xs transition cursor-pointer"
+            title="Posição Atualizada de Bens (Nome, Patrimônio, Aquisição, Valor Original, Deprec. Acumulada, Saldo Residual e Taxa)"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-teal-700" />
+            <span>Posição Atualizada de Bens</span>
+          </button>
+
+          <button
+            onClick={() => setActiveReportModal('mapa_depreciacao')}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 text-xs font-bold shadow-2xs transition cursor-pointer"
+            title="Mapa de Depreciação com período, valor a depreciar, cota do período e saldo final"
+          >
+            <Layers className="w-4 h-4 text-indigo-700" />
+            <span>Mapa de Depreciação</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setFichaAssetId(filteredAssets[0]?.id || assets[0]?.id);
+              setShowFichaModal(true);
+            }}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-teal-300 bg-teal-50 hover:bg-teal-100 text-teal-900 text-xs font-bold shadow-2xs transition cursor-pointer"
+            title="Emitir Ficha Individual do Bem com dados cadastrais e histórico de movimentações"
+          >
+            <FileText className="w-4 h-4 text-teal-700" />
+            <span>Ficha do Bem</span>
           </button>
 
           <button
@@ -865,6 +919,16 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
                                 </button>
                               )}
                               <button
+                                onClick={() => {
+                                  setFichaAssetId(asset.id);
+                                  setShowFichaModal(true);
+                                }}
+                                className="px-2 py-1 rounded bg-teal-50 text-teal-700 hover:bg-teal-100 text-[10px] font-bold transition cursor-pointer"
+                                title="Ver Ficha Individual do Bem"
+                              >
+                                Ficha
+                              </button>
+                              <button
                                 onClick={() => onEditAsset(asset)}
                                 className="p-1 text-slate-400 hover:text-slate-700 transition cursor-pointer"
                                 title="Editar bem"
@@ -939,8 +1003,21 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
                 className="bg-slate-50 border border-slate-300 rounded px-2.5 py-1 text-xs font-bold text-slate-800 cursor-pointer"
               />
               <button
+                onClick={async () => {
+                  await fetchDepreciation();
+                  showMsg(`Apuração de depreciação processada com sucesso para ${selectedMonth.split('-').reverse().join('/')}!`);
+                }}
+                disabled={loadingDepreciation}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs font-bold transition cursor-pointer disabled:opacity-50 shadow-2xs"
+                title="Processar apuração contábil da depreciação"
+              >
+                {loadingDepreciation ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                <span>Processar Apuração</span>
+              </button>
+
+              <button
                 onClick={fetchDepreciation}
-                className="p-1 text-teal-700 hover:bg-teal-50 rounded transition cursor-pointer"
+                className="p-1.5 text-teal-700 hover:bg-teal-50 rounded-lg transition cursor-pointer border border-teal-200 bg-white"
                 title="Recalcular"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${loadingDepreciation ? 'animate-spin' : ''}`} />
@@ -1557,11 +1634,11 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
         </div>
       )}
 
-      {/* Report Print Modal */}
-      {showReportModal && (
+      {/* Report Print Modals */}
+      {activeReportModal === 'inventario' && (
         <ReportPrintModal
           isOpen={true}
-          onClose={() => setShowReportModal(false)}
+          onClose={() => setActiveReportModal(null)}
           title="Inventário de Ativo Imobilizado & Posição Patrimonial"
           subtitle={`Controle de Bens e Quotas de Depreciação (CPC 27) • Empresa: ${currentCompany.fantasyName || currentCompany.name}`}
           company={currentCompany}
@@ -1573,6 +1650,52 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
           ]}
           columns={inventoryReportColumns}
           data={filteredAssets}
+        />
+      )}
+
+      {activeReportModal === 'posicao_atualizada' && (
+        <ReportPrintModal
+          isOpen={true}
+          onClose={() => setActiveReportModal(null)}
+          title="Relatório: Posição Atualizada de Bens"
+          subtitle={`Competência de Emissão: ${selectedMonth.split('-').reverse().join('/')} • Empresa: ${currentCompany.fantasyName || currentCompany.name}`}
+          company={currentCompany}
+          summaryMetrics={[
+            { label: 'Competência', value: selectedMonth.split('-').reverse().join('/') },
+            { label: 'Total Ativos', value: depreciationSummary?.activeAssets || assets.length },
+            { label: 'Deprec. Acumulada Total', value: formatMoney(depreciationSummary?.totalAccumulatedDepreciation || 0) },
+            { label: 'Saldo Residual (VCL Total)', value: formatMoney(depreciationSummary?.totalNetBookValue || 0) },
+          ]}
+          columns={posicaoAtualizadaReportColumns}
+          data={depreciationSummary?.items || []}
+        />
+      )}
+
+      {activeReportModal === 'mapa_depreciacao' && (
+        <ReportPrintModal
+          isOpen={true}
+          onClose={() => setActiveReportModal(null)}
+          title={`Mapa de Depreciação do Ativo Imobilizado (${periodType.toUpperCase()})`}
+          subtitle={`Período de Apuração: ${selectedMonth.split('-').reverse().join('/')} • Empresa: ${currentCompany.fantasyName || currentCompany.name}`}
+          company={currentCompany}
+          summaryMetrics={[
+            { label: 'Período / Competência', value: selectedMonth.split('-').reverse().join('/') + ` (${periodType.toUpperCase()})` },
+            { label: 'Valor a Depreciar Total', value: formatMoney(depreciationSummary?.totalDepreciableValue || 0) },
+            { label: `Cota do Período (${periodType.toUpperCase()})`, value: formatMoney(depreciationSummary?.totalPeriodDepreciation || depreciationSummary?.totalMonthlyDepreciation || 0) },
+            { label: 'Saldo Final a Depreciar (VCL)', value: formatMoney(depreciationSummary?.totalNetBookValue || 0) },
+          ]}
+          columns={mapaDepreciacaoReportColumns}
+          data={depreciationSummary?.items || []}
+        />
+      )}
+
+      {showFichaModal && (
+        <AssetFichaModal
+          isOpen={true}
+          onClose={() => setShowFichaModal(false)}
+          assets={filteredAssets.length > 0 ? filteredAssets : assets}
+          initialAssetId={fichaAssetId}
+          company={currentCompany}
         />
       )}
 
