@@ -267,9 +267,6 @@ export const AssetFichaModal: React.FC<AssetFichaModalProps> = ({
             <div className="text-right text-xs space-y-0.5 text-slate-600 self-start sm:self-auto border-t sm:border-t-0 pt-2 sm:pt-0">
               <p className="font-bold text-slate-900 text-sm">{company.name}</p>
               <p className="font-mono text-[11px]">CNPJ: {company.cnpj}</p>
-              <p className="text-[10px] text-slate-500">
-                Emissão: {new Date().toLocaleDateString('pt-BR')} às {new Date().toLocaleTimeString('pt-BR')}
-              </p>
             </div>
           </div>
 

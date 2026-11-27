@@ -1,5 +1,5 @@
 import React from 'react';
-import { Printer, Download, X, FileText, CheckCircle2 } from 'lucide-react';
+import { Printer, Download, X, FileText } from 'lucide-react';
 import { Company } from '../types';
 
 export interface ReportColumn {
@@ -30,7 +30,7 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
   summaryMetrics,
   columns,
   data,
-  userEmail = 'rodrigobento1979@gmail.com',
+  userEmail = 'secsscont@gmail.com',
 }) => {
   if (!isOpen) return null;
 
@@ -62,27 +62,27 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-0 sm:p-4 print:p-0 print:bg-white print:static">
-      <div className="bg-white rounded-none sm:rounded-2xl max-w-5xl w-full h-[100dvh] sm:h-auto sm:max-h-[92dvh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden print:max-w-none print:max-h-none print:shadow-none print:border-none print:rounded-none">
+      <div className="bg-white rounded-none sm:rounded-xl max-w-5xl w-full h-[100dvh] sm:h-auto sm:max-h-[92dvh] flex flex-col shadow-2xl border border-slate-300 overflow-hidden print:max-w-none print:max-h-none print:shadow-none print:border-none print:rounded-none">
         
         {/* Modal Toolbar (Hidden during print) */}
-        <div className="p-3.5 sm:p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-3 print:hidden">
+        <div className="p-3.5 sm:p-4 border-b border-slate-300 bg-slate-100 flex items-center justify-between gap-3 print:hidden">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-[#004d40] text-white flex items-center justify-center">
               <FileText className="w-4 h-4 text-[#a7ffeb]" />
             </div>
             <div>
-              <h3 className="font-bold text-slate-900 text-xs sm:text-sm">Emissão de Relatório</h3>
-              <p className="text-[11px] text-slate-500">Visualização de impressão & PDF</p>
+              <h3 className="font-bold text-slate-900 text-xs sm:text-sm">Relatório Contábil Oficial</h3>
+              <p className="text-[11px] text-slate-600">Formato pronto para impressão e exportação</p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
             <button
               onClick={handleExportCsv}
-              className="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+              className="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer bg-white"
               title="Baixar como planilha CSV"
             >
-              <Download className="w-3.5 h-3.5 text-slate-500" />
+              <Download className="w-3.5 h-3.5 text-slate-600" />
               <span className="hidden sm:inline">Exportar CSV</span>
             </button>
 
@@ -96,52 +96,48 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
 
             <button
               onClick={onClose}
-              className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-200 transition cursor-pointer ml-1"
+              className="p-1.5 text-slate-500 hover:text-slate-900 rounded-lg hover:bg-slate-200 transition cursor-pointer ml-1"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
         </div>
 
-        {/* Printable Document Body */}
-        <div className="p-6 sm:p-8 overflow-y-auto flex-1 space-y-5 text-slate-900 font-sans print:p-4 print:overflow-visible print:space-y-4">
+        {/* Printable Formal Accounting Report Body */}
+        <div className="p-6 sm:p-10 overflow-y-auto flex-1 space-y-6 text-slate-900 font-sans print:p-4 print:overflow-visible print:space-y-4 bg-white">
           
-          {/* Report Header */}
-          <div className="border-b-2 border-slate-800 pb-3 flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+          {/* Formal Report Header (Domínio / Questor / Professional Standard) */}
+          <div className="border-b-2 border-slate-900 pb-4 flex flex-col sm:flex-row sm:items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-2">
-                <span className="px-2 py-0.5 rounded text-[10px] font-extrabold uppercase bg-teal-900 text-white tracking-wider">
-                  ContSuite
+                <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-slate-900 text-white tracking-wider">
+                  CONTSUITE
                 </span>
-                <span className="text-xs font-bold text-slate-700">Sistema Contábil Corporativo</span>
+                <span className="text-xs font-bold text-slate-700">Sistema Contábil Corporativo (CPC 27)</span>
               </div>
-              <h1 className="text-lg sm:text-xl font-black text-slate-900 mt-1 uppercase tracking-tight">
+              <h1 className="text-lg sm:text-xl font-black text-slate-900 mt-2 uppercase tracking-tight">
                 {title}
               </h1>
               {subtitle && (
-                <p className="text-xs text-slate-600 mt-0.5 font-medium">{subtitle}</p>
+                <p className="text-xs text-slate-700 mt-1 font-semibold">{subtitle}</p>
               )}
             </div>
 
-            <div className="text-right text-xs space-y-0.5 text-slate-600 self-start sm:self-auto border-t sm:border-t-0 pt-2 sm:pt-0">
-              <p className="font-bold text-slate-900 text-sm">{company.fantasyName || company.name}</p>
-              <p className="font-mono text-[11px]">CNPJ: {company.cnpj}</p>
-              <p className="text-[10px] text-slate-500">
-                Emitido em: {new Date().toLocaleDateString('pt-BR')} às {new Date().toLocaleTimeString('pt-BR')}
-              </p>
-              <p className="text-[10px] text-slate-500">Operador: {userEmail}</p>
+            <div className="text-right text-xs space-y-1 text-slate-700 self-start sm:self-auto border-t sm:border-t-0 pt-2 sm:pt-0 font-mono">
+              <p className="font-bold text-slate-900 text-sm font-sans">{company.fantasyName || company.name}</p>
+              <p>CNPJ: {company.cnpj}</p>
             </div>
           </div>
 
-          {/* Optional Summary Metric Badges */}
+          {/* Formal Summary Box (Instead of dashboard cards) */}
           {summaryMetrics && summaryMetrics.length > 0 && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+            <div className="border border-slate-300 rounded-lg p-3 bg-slate-50/80 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
               {summaryMetrics.map((metric, idx) => (
-                <div key={idx} className="p-2.5 rounded-lg border border-slate-200 bg-slate-50/70">
-                  <span className="text-[10px] font-bold uppercase text-slate-500 block">
+                <div key={idx} className="space-y-0.5">
+                  <span className="text-[10px] font-bold uppercase text-slate-600 block">
                     {metric.label}
                   </span>
-                  <span className="text-sm font-extrabold text-slate-900 block mt-0.5">
+                  <span className="text-sm font-black text-slate-900 block font-mono">
                     {metric.value}
                   </span>
                 </div>
@@ -149,15 +145,15 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
             </div>
           )}
 
-          {/* Main Data Table */}
-          <div className="border border-slate-200 rounded-lg overflow-hidden">
+          {/* Main Professional Accounting Table */}
+          <div className="border border-slate-400 rounded-md overflow-hidden">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
-                <tr className="bg-slate-100 text-slate-800 font-bold border-b border-slate-300 text-[11px]">
+                <tr className="bg-slate-200 text-slate-900 font-black border-b-2 border-slate-400 text-[11px] uppercase tracking-wider">
                   {columns.map((col, idx) => (
                     <th 
                       key={idx} 
-                      className={`py-2 px-2.5 ${
+                      className={`py-2.5 px-3 border-r border-slate-300 last:border-r-0 ${
                         col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : 'text-left'
                       }`}
                     >
@@ -166,22 +162,22 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
                   ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-200 text-slate-800">
+              <tbody className="divide-y divide-slate-300 text-slate-900 font-normal">
                 {data.length === 0 ? (
                   <tr>
-                    <td colSpan={columns.length} className="py-8 text-center text-slate-400 italic text-xs">
+                    <td colSpan={columns.length} className="py-8 text-center text-slate-500 italic text-xs">
                       Nenhum registro encontrado para emissão do relatório.
                     </td>
                   </tr>
                 ) : (
                   data.map((row, rowIdx) => (
-                    <tr key={rowIdx} className="hover:bg-slate-50/60 print:hover:bg-transparent">
+                    <tr key={rowIdx} className="hover:bg-slate-50 print:hover:bg-transparent even:bg-slate-50/40">
                       {columns.map((col, colIdx) => {
                         const cellVal = row[col.key];
                         return (
                           <td 
                             key={colIdx} 
-                            className={`py-2 px-2.5 text-xs ${
+                            className={`py-2 px-3 border-r border-slate-200 last:border-r-0 text-xs ${
                               col.align === 'right' ? 'text-right font-mono' : col.align === 'center' ? 'text-center' : 'text-left'
                             }`}
                           >
@@ -196,21 +192,21 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
             </table>
           </div>
 
-          {/* Report Footer Note */}
-          <div className="pt-3 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between text-[10px] text-slate-400 gap-1">
-            <span>ContSuite • Documento emitido para conferência e conciliação contábil</span>
-            <span>Total de Registros: {data.length}</span>
+          {/* Report Footer / Authentication Block */}
+          <div className="pt-4 border-t border-slate-300 flex flex-col sm:flex-row items-center justify-between text-[11px] text-slate-600 gap-2">
+            <span>ContSuite • Sistema de Gestão de Ativo Imobilizado & Depreciação</span>
+            <span>Total de Registros Listados: <strong>{data.length}</strong></span>
           </div>
 
         </div>
 
         {/* Modal Bottom Close */}
-        <div className="p-3 bg-slate-50 border-t border-slate-200 flex justify-end print:hidden">
+        <div className="p-3 bg-slate-100 border-t border-slate-300 flex justify-end print:hidden">
           <button
             onClick={onClose}
-            className="px-4 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-semibold cursor-pointer"
+            className="px-5 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold cursor-pointer"
           >
-            Fechar
+            Fechar Relatório
           </button>
         </div>
 
