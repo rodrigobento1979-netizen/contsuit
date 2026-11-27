@@ -1688,6 +1688,26 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                     <p className="text-[10px] text-slate-500 mt-1">
                       * Crie a Senha de App logado exatamente na conta <strong>contsuitesistemas@gmail.com</strong> em Conta Google &gt; Segurança &gt; Senhas de App.
                     </p>
+                    <div className="flex flex-wrap gap-2 mt-2 pt-2 border-t border-slate-200">
+                      <a
+                        href="https://mail.google.com/mail/u/0/#settings/fwdandpop"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2.5 py-1 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-900 border border-teal-200 text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer"
+                      >
+                        <ExternalLink className="w-3 h-3 text-teal-700" />
+                        <span>1. Ativar IMAP no Gmail</span>
+                      </a>
+                      <a
+                        href="https://myaccount.google.com/apppasswords"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer"
+                      >
+                        <ExternalLink className="w-3 h-3 text-amber-700" />
+                        <span>2. Gerar Senha de App (Google)</span>
+                      </a>
+                    </div>
                   </div>
 
                   {imapLastInfo && !imapStatusMessage && (

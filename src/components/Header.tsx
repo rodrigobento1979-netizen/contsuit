@@ -51,31 +51,31 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     // Exact green/teal color from the login screen (#00897b / #009688)
-    <header className="bg-gradient-to-r from-[#00796b] via-[#00897b] to-[#00695c] text-white shadow-md z-20 border-b border-[#004d40] w-full max-w-full overflow-hidden">
-      <div className="px-3 sm:px-6 py-2.5 flex items-center justify-between gap-2 sm:gap-4">
+    <header className="bg-gradient-to-r from-[#00796b] via-[#00897b] to-[#00695c] text-white shadow-xs z-20 border-b border-[#004d40] w-full max-w-full overflow-hidden">
+      <div className="px-2.5 sm:px-5 py-1.5 sm:py-2 flex items-center justify-between gap-2">
         
         {/* Left: Mobile Menu Toggle + Current Section Breadcrumb */}
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
           {onToggleMobileMenu && (
             <button
               onClick={onToggleMobileMenu}
               className="md:hidden p-1.5 rounded-lg bg-black/15 text-white hover:bg-black/25 cursor-pointer shrink-0"
               aria-label="Abrir menu"
             >
-              <Menu className="w-5 h-5" />
+              <Menu className="w-4 h-4" />
             </button>
           )}
 
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 min-w-0">
-              <h2 className="text-xs sm:text-base font-extrabold tracking-tight text-white leading-tight truncate">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <h2 className="text-xs sm:text-sm font-extrabold tracking-tight text-white leading-tight truncate">
                 {currentInfo.title}
               </h2>
-              <span className="hidden sm:inline-block text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-white/15 text-[#e0f2f1] border border-white/20 shrink-0">
-                ContSuite v1.2
+              <span className="hidden sm:inline-block text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.2 rounded-full bg-white/15 text-[#e0f2f1] border border-white/20 shrink-0">
+                v1.3
               </span>
             </div>
-            <p className="text-[11px] text-[#b2dfdb] hidden sm:block truncate">
+            <p className="text-[10px] text-[#b2dfdb] hidden md:block truncate">
               {currentInfo.subtitle}
             </p>
           </div>
