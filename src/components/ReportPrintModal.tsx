@@ -8,12 +8,14 @@ import {
   ChevronRight,
   Columns,
   Loader2,
+  FileDown,
 } from 'lucide-react';
 import { Company } from '../types';
 import {
   ReportColumnLike,
   escapeHtml,
   formatCurrencyBRL,
+  generateAndDownloadReportPdf,
   paginateReportData,
   printCleanHtmlDocument,
   reactNodeToPlainText,
@@ -52,13 +54,14 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
   userEmail,
 }) => {
   const [rowsPerPage, setRowsPerPage] = useState<number>(() =>
-    columns.length >= 7 ? 15 : 20
+    columns.length >= 6 ? 12 : 18
   );
   const [orientation, setOrientation] = useState<'portrait' | 'landscape'>(() =>
     columns.length >= 6 ? 'landscape' : 'portrait'
   );
   const [activePage, setActivePage] = useState<number>(1);
   const [isPrinting, setIsPrinting] = useState<boolean>(false);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState<boolean>(false);
   const pageRefs = useRef<Record<number, HTMLElement | null>>({});
 
   const generatedAt = useMemo(
@@ -77,6 +80,10 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
   );
 
   const hasMonetaryColumns = monetaryKeys.size > 0;
+  const monetaryColumns = useMemo(
+    () => columns.filter((col) => monetaryKeys.has(col.key)),
+    [columns, monetaryKeys]
+  );
 
   useEffect(() => {
     setActivePage(1);
@@ -157,7 +164,7 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
       .map((page) => {
         const tbodyRowsHtml =
           page.rows.length === 0
-            ? `<tr><td colspan="${columns.length}" class="text-center" style="padding: 20px; color: #64748b; font-style: italic;">Nenhum registro encontrado para emissão do relatório.</td></tr>`
+            ? `<tr><td colspan="${columns.length}" class="text-center" style="padding: 18px; color: #64748b; font-style: italic;">Nenhum registro encontrado para emissão do relatório.</td></tr>`
             : page.rows
                 .map(
                   (row) => `<tr>
@@ -181,6 +188,8 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
                 .join('');
 
         let tfootHtml = '';
+        let footerTotalsSummaryHtml = '';
+
         if (hasMonetaryColumns && page.rows.length > 0) {
           const subtotalCells = columns
             .map((col, idx) => {
@@ -218,6 +227,24 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
             <tr class="subtotal-row">${subtotalCells}</tr>
             ${grandTotalRowHtml}
           </tfoot>`;
+
+          const footerItems = monetaryColumns
+            .filter((col) => page.pageTotals[col.key] !== undefined)
+            .map(
+              (col) =>
+                `<span><strong>${escapeHtml(
+                  col.label.replace(/\s*\(R\$\)/gi, '')
+                )}:</strong> <span class="mono">${escapeHtml(
+                  formatCurrencyBRL(page.pageTotals[col.key])
+                )}</span></span>`
+            )
+            .join(' • ');
+
+          if (footerItems) {
+            footerTotalsSummaryHtml = `<div class="page-footer-totals">
+              <span><strong>TOTALIZAÇÃO DO RODAPÉ (PÁG. ${page.pageNumber}):</strong> ${footerItems}</span>
+            </div>`;
+          }
         }
 
         return `<section class="report-page">
@@ -250,6 +277,8 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
             </table>
           </div>
 
+          ${footerTotalsSummaryHtml}
+
           <div class="page-footer">
             <span>ContSuite • Relatório Contábil Oficial${
               safeUserEmail ? ` • Operador: ${safeUserEmail}` : ''
@@ -277,6 +306,29 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
       });
     } finally {
       setIsPrinting(false);
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    try {
+      setIsGeneratingPdf(true);
+      await generateAndDownloadReportPdf({
+        title,
+        subtitle,
+        companyName: company.fantasyName || company.name || '',
+        companyCnpj: company.cnpj || '',
+        generatedAt,
+        userEmail,
+        orientation,
+        summaryMetrics,
+        columns,
+        pages,
+        grandTotals,
+        monetaryKeys,
+        totalRecords: data.length,
+      });
+    } finally {
+      setIsGeneratingPdf(false);
     }
   };
 
@@ -353,7 +405,7 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
               </div>
               <p className="text-[11px] text-slate-600 truncate">
                 {hasMonetaryColumns
-                  ? 'Totalização automática no rodapé de cada página e impressão A4 estruturada'
+                  ? 'Totalização automática por página no rodapé • Impressão e PDF A4 estruturados'
                   : 'Paginação A4 estruturada pronta para impressão e exportação'}
               </p>
             </div>
@@ -368,11 +420,11 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
                 onChange={(e) => setRowsPerPage(Number(e.target.value))}
                 className="bg-transparent font-bold text-slate-900 focus:outline-none cursor-pointer"
               >
+                <option value={10}>10</option>
                 <option value={12}>12</option>
                 <option value={15}>15</option>
-                <option value={20}>20</option>
+                <option value={18}>18</option>
                 <option value={25}>25</option>
-                <option value={30}>30</option>
               </select>
             </label>
 
@@ -425,21 +477,36 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
               title="Baixar como planilha CSV"
             >
               <Download className="w-3.5 h-3.5 text-slate-600" />
-              <span className="hidden sm:inline">Exportar CSV</span>
+              <span className="hidden sm:inline">CSV</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleDownloadPdf}
+              disabled={isGeneratingPdf}
+              className="px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+              title="Gerar e baixar arquivo PDF paginado A4"
+            >
+              {isGeneratingPdf ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <FileDown className="w-3.5 h-3.5" />
+              )}
+              <span>{isGeneratingPdf ? 'Gerando PDF...' : 'Baixar PDF'}</span>
             </button>
 
             <button
               type="button"
               onClick={handlePrint}
               disabled={isPrinting}
-              className="px-4 py-1.5 rounded-lg bg-[#00897b] hover:bg-[#00796b] disabled:opacity-60 text-white text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+              className="px-3.5 py-1.5 rounded-lg bg-[#00897b] hover:bg-[#00796b] disabled:opacity-60 text-white text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
             >
               {isPrinting ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
               ) : (
                 <Printer className="w-3.5 h-3.5" />
               )}
-              <span>{isPrinting ? 'Preparando...' : 'Imprimir / Salvar PDF'}</span>
+              <span>{isPrinting ? 'Preparando...' : 'Imprimir'}</span>
             </button>
 
             <button
@@ -462,12 +529,12 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
                 pageRefs.current[page.pageNumber] = el;
               }}
               onMouseEnter={() => setActivePage(page.pageNumber)}
-              className={`bg-white mx-auto shadow-lg border border-slate-300 rounded-md p-5 sm:p-8 space-y-5 text-slate-900 font-sans print:shadow-none print:border-none print:rounded-none print:p-4 print:break-after-page last:print:break-after-auto ${
+              className={`bg-white mx-auto shadow-lg border border-slate-300 rounded-md p-5 sm:p-7 space-y-4 text-slate-900 font-sans print:shadow-none print:border-none print:rounded-none print:p-4 print:break-after-page last:print:break-after-auto ${
                 orientation === 'landscape' ? 'max-w-[1060px]' : 'max-w-[820px]'
               }`}
             >
               {/* Formal Report Header (Repeated on Every Page) */}
-              <div className="border-b-2 border-slate-900 pb-3.5 flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+              <div className="border-b-2 border-slate-900 pb-3 flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-slate-900 text-white tracking-wider">
@@ -650,8 +717,31 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
                 </table>
               </div>
 
+              {/* Explicit Page Footer Monetary Totalization Summary Strip */}
+              {hasMonetaryColumns && page.rows.length > 0 && (
+                <div className="bg-slate-50 border border-slate-300 rounded-md px-3 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-800">
+                  <span className="font-black uppercase text-slate-900 tracking-tight">
+                    Totalização do Rodapé (Pág. {page.pageNumber}):
+                  </span>
+                  {monetaryColumns.map((col) => {
+                    const val = page.pageTotals[col.key];
+                    if (val === undefined) return null;
+                    return (
+                      <span key={col.key} className="inline-flex items-center gap-1">
+                        <span className="text-slate-600 font-semibold">
+                          {col.label.replace(/\s*\(R\$\)/gi, '')}:
+                        </span>
+                        <span className="font-mono font-black text-slate-900 tabular-nums">
+                          {formatCurrencyBRL(val)}
+                        </span>
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+
               {/* Page Footer Bar */}
-              <div className="pt-3 border-t border-slate-300 flex flex-col sm:flex-row items-center justify-between text-[10px] text-slate-600 gap-2">
+              <div className="pt-2.5 border-t border-slate-300 flex flex-col sm:flex-row items-center justify-between text-[10px] text-slate-600 gap-2">
                 <span>
                   ContSuite • Sistema de Gestão Contábil & Ativo Imobilizado
                 </span>
