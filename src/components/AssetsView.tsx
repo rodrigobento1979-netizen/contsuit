@@ -170,8 +170,8 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
     { key: 'description', label: 'Descrição do Bem', align: 'left' },
     { key: 'categoryLabel', label: 'Categoria', align: 'left' },
     { key: 'acquisitionDate', label: 'Data Aquisição', align: 'center', format: (val) => val ? String(val).split('-').reverse().join('/') : '-' },
-    { key: 'acquisitionValue', label: 'Valor Aquisição (R$)', align: 'right', format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
-    { key: 'annualRate', label: 'Taxa a.a.', align: 'center', format: (val) => `${val}%` },
+    { key: 'acquisitionValue', label: 'Valor Aquisição (R$)', align: 'right', isMonetary: true, format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
+    { key: 'annualRate', label: 'Taxa a.a.', align: 'center', isMonetary: false, format: (val) => `${val}%` },
     { key: 'costCenter', label: 'Centro de Custo', align: 'left' },
     { 
       key: 'status', 
@@ -189,21 +189,21 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
     { key: 'tagNumber', label: 'Patrimônio', align: 'left' },
     { key: 'description', label: 'Nome / Descrição do Bem', align: 'left' },
     { key: 'acquisitionDate', label: 'Aquisição', align: 'center', format: (val) => val ? String(val).split('-').reverse().join('/') : '-' },
-    { key: 'acquisitionValue', label: 'Valor Original Compra (R$)', align: 'right', format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
-    { key: 'currentAccumulatedDepreciation', label: 'Deprec. Acumulada (Até Emissão) (R$)', align: 'right', format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
-    { key: 'netBookValue', label: 'Saldo Residual (VCL) (R$)', align: 'right', format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
-    { key: 'annualRate', label: 'Taxa Deprec. (% a.a.)', align: 'center', format: (val) => `${val}% a.a.` },
+    { key: 'acquisitionValue', label: 'Valor Original Compra (R$)', align: 'right', isMonetary: true, format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
+    { key: 'currentAccumulatedDepreciation', label: 'Deprec. Acumulada (Até Emissão) (R$)', align: 'right', isMonetary: true, format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
+    { key: 'netBookValue', label: 'Saldo Residual (VCL) (R$)', align: 'right', isMonetary: true, format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
+    { key: 'annualRate', label: 'Taxa Deprec. (% a.a.)', align: 'center', isMonetary: false, format: (val) => `${val}% a.a.` },
   ];
 
   const mapaDepreciacaoReportColumns: ReportColumn[] = [
     { key: 'tagNumber', label: 'Patrimônio', align: 'left' },
     { key: 'description', label: 'Descrição do Bem', align: 'left' },
-    { key: 'acquisitionValue', label: 'Valor Aquisição (R$)', align: 'right', format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
-    { key: 'depreciableValue', label: 'Valor a Depreciar (R$)', align: 'right', format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
-    { key: 'previousAccumulatedDepreciation', label: 'Deprec. Acum. Anterior (R$)', align: 'right', format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
-    { key: 'periodDepreciation', label: `Cota do Período (${periodType.toUpperCase()}) (R$)`, align: 'right', format: (val, row) => `R$ ${Number(val || row.monthlyDepreciation || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
-    { key: 'currentAccumulatedDepreciation', label: 'Deprec. Acum. Atual (R$)', align: 'right', format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
-    { key: 'netBookValue', label: 'Saldo Final a Depreciar (R$)', align: 'right', format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
+    { key: 'acquisitionValue', label: 'Valor Aquisição (R$)', align: 'right', isMonetary: true, format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
+    { key: 'depreciableValue', label: 'Valor a Depreciar (R$)', align: 'right', isMonetary: true, format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
+    { key: 'previousAccumulatedDepreciation', label: 'Deprec. Acum. Anterior (R$)', align: 'right', isMonetary: true, format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
+    { key: 'periodDepreciation', label: `Cota do Período (${periodType.toUpperCase()}) (R$)`, align: 'right', isMonetary: true, getNumericValue: (row) => Number(row?.periodDepreciation ?? row?.monthlyDepreciation ?? 0), format: (val, row) => `R$ ${Number(val ?? row?.monthlyDepreciation ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
+    { key: 'currentAccumulatedDepreciation', label: 'Deprec. Acum. Atual (R$)', align: 'right', isMonetary: true, format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
+    { key: 'netBookValue', label: 'Saldo Final a Depreciar (R$)', align: 'right', isMonetary: true, format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
   ];
 
   const showMsg = (text: string, type: 'success' | 'error' = 'success') => {

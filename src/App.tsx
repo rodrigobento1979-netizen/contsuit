@@ -1407,7 +1407,7 @@ export default function App() {
       <div className="min-h-[100dvh] bg-slate-100/70 text-slate-900 flex font-sans antialiased w-full overflow-x-clip">
         {/* Toast notification */}
         {toastMessage && (
-          <div className="fixed bottom-4 left-3 right-3 sm:left-auto sm:bottom-5 sm:right-5 sm:max-w-md z-[90] flex items-center gap-2 px-4 py-3 rounded-xl bg-slate-900 text-white text-xs font-semibold shadow-2xl border border-slate-700 animate-in fade-in slide-in-from-bottom-5">
+          <div className="print:hidden fixed bottom-4 left-3 right-3 sm:left-auto sm:bottom-5 sm:right-5 sm:max-w-md z-[90] flex items-center gap-2 px-4 py-3 rounded-xl bg-slate-900 text-white text-xs font-semibold shadow-2xl border border-slate-700 animate-in fade-in slide-in-from-bottom-5">
             {toastMessage.type === 'success' ? (
               <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
             ) : (
@@ -1418,7 +1418,7 @@ export default function App() {
         )}
 
         {/* Desktop Left Sidebar: Sticky to viewport while main content scrolls with browser */}
-        <div className="hidden md:flex shrink-0 sticky top-0 h-screen z-30">
+        <div className="hidden md:flex shrink-0 sticky top-0 h-screen z-30 print:hidden">
           <Sidebar
             currentUser={currentUser}
             currentCompany={currentCompany}
@@ -1475,7 +1475,7 @@ export default function App() {
 
       {/* Right Column: Uses native browser window scroll at the exact right edge of the screen */}
       <div className="flex-1 flex flex-col min-w-0 min-h-[100dvh] w-full">
-        <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-xs border-b border-slate-200">
+        <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-xs border-b border-slate-200 print:hidden">
           <Header
             currentUser={currentUser}
             currentCompany={currentCompany}

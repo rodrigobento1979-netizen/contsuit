@@ -65,8 +65,8 @@ export const HonorariosView: React.FC<HonorariosViewProps> = ({
   const feeReportColumns: ReportColumn[] = [
     { key: 'companyName', label: 'Empresa Cliente', align: 'left' },
     { key: 'cnpj', label: 'CNPJ', align: 'left' },
-    { key: 'monthlyFee', label: 'Mensalidade (R$)', align: 'right', format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
-    { key: 'dueDay', label: 'Vencimento', align: 'center', format: (val) => `Dia ${val}` },
+    { key: 'monthlyFee', label: 'Mensalidade (R$)', align: 'right', isMonetary: true, format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
+    { key: 'dueDay', label: 'Vencimento', align: 'center', isMonetary: false, format: (val) => `Dia ${val}` },
     { 
       key: 'lastPaymentStatus', 
       label: 'Status Competência', 

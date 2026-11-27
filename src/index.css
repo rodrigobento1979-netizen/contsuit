@@ -31,3 +31,23 @@ html, body {
 ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
 }
+
+@media print {
+  body.contsuite-report-modal-open * {
+    visibility: hidden;
+  }
+  body.contsuite-report-modal-open .contsuite-printable-report,
+  body.contsuite-report-modal-open .contsuite-printable-report * {
+    visibility: visible;
+  }
+  body.contsuite-report-modal-open .contsuite-printable-report {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    background: #ffffff !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+}

@@ -47,11 +47,11 @@ export const DepreciationView: React.FC<DepreciationViewProps> = ({
     { key: 'tagNumber', label: 'Plaqueta' },
     { key: 'description', label: 'Descrição do Bem' },
     { key: 'categoryLabel', label: 'Categoria' },
-    { key: 'acquisitionValue', label: 'Vlr Aquisição', align: 'right', format: (val) => formatMoney(Number(val) || 0) },
-    { key: 'annualRate', label: 'Taxa a.a.', align: 'center', format: (val) => `${val}%` },
-    { key: 'monthlyDepreciation', label: 'Quota Mês', align: 'right', format: (val) => formatMoney(Number(val) || 0) },
-    { key: 'currentAccumulatedDepreciation', label: 'Deprec. Acumulada', align: 'right', format: (val) => formatMoney(Number(val) || 0) },
-    { key: 'netBookValue', label: 'VCL Residual', align: 'right', format: (val) => formatMoney(Number(val) || 0) },
+    { key: 'acquisitionValue', label: 'Vlr Aquisição', align: 'right', isMonetary: true, format: (val) => formatMoney(Number(val) || 0) },
+    { key: 'annualRate', label: 'Taxa a.a.', align: 'center', isMonetary: false, format: (val) => `${val}%` },
+    { key: 'monthlyDepreciation', label: 'Quota Mês', align: 'right', isMonetary: true, format: (val) => formatMoney(Number(val) || 0) },
+    { key: 'currentAccumulatedDepreciation', label: 'Deprec. Acumulada', align: 'right', isMonetary: true, format: (val) => formatMoney(Number(val) || 0) },
+    { key: 'netBookValue', label: 'VCL Residual', align: 'right', isMonetary: true, format: (val) => formatMoney(Number(val) || 0) },
     { key: 'status', label: 'Situação', align: 'center' },
   ];
 

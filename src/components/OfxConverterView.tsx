@@ -522,8 +522,13 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
     },
     { 
       key: 'amount', 
-      label: 'Valor (R$)', 
+      label: 'Valor Líquido (R$)', 
       align: 'right',
+      isMonetary: true,
+      getNumericValue: (row) =>
+        row?.type === 'DEBIT'
+          ? -Math.abs(Number(row?.amount || 0))
+          : Math.abs(Number(row?.amount || 0)),
       format: (val, row) => (
         <span className={`font-mono font-bold ${row?.type === 'CREDIT' ? 'text-emerald-700' : 'text-rose-700'}`}>
           {row?.type === 'CREDIT' ? '+' : '-'} R$ {Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
@@ -536,17 +541,19 @@ export const OfxConverterView: React.FC<OfxConverterViewProps> = ({
     { key: 'bankName', label: 'Banco / Instituição', align: 'left' },
     { key: 'accountNumber', label: 'Conta / Agência', align: 'left', format: (val, row) => `Ag: ${row.agency || 'N/D'} / Cta: ${val || 'N/D'}` },
     { key: 'period', label: 'Período', align: 'center', format: (_, row) => `${row.startDate} a ${row.endDate}` },
-    { key: 'transactionsCount', label: 'Lançamentos', align: 'center' },
+    { key: 'transactionsCount', label: 'Lançamentos', align: 'center', isMonetary: false },
     { 
       key: 'totalCredits', 
       label: 'Entradas (R$)', 
       align: 'right',
+      isMonetary: true,
       format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
     },
     { 
       key: 'totalDebits', 
       label: 'Saídas (R$)', 
       align: 'right',
+      isMonetary: true,
       format: (val) => `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
     },
   ];
