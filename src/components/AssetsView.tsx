@@ -220,7 +220,16 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
     if (!currentCompany.id) return;
     try {
       setLoadingDepreciation(true);
-      const res = await fetch(`/api/assets/depreciation?companyId=${currentCompany.id}&month=${selectedMonth}&periodType=${periodType}`);
+      const res = await fetch(`/api/assets/depreciation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          companyId: currentCompany.id,
+          month: selectedMonth,
+          periodType,
+          assets,
+        }),
+      });
       if (res.ok) {
         const data = await res.json();
         setDepreciationSummary(data);
@@ -230,7 +239,7 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
     } finally {
       setLoadingDepreciation(false);
     }
-  }, [currentCompany.id, selectedMonth, periodType]);
+  }, [currentCompany.id, selectedMonth, periodType, assets]);
 
   useEffect(() => {
     fetchDepreciation();

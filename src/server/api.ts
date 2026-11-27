@@ -1135,6 +1135,19 @@ apiRouter.get('/assets/depreciation', (req: Request, res: Response) => {
   }
 });
 
+apiRouter.post('/assets/depreciation', (req: Request, res: Response) => {
+  try {
+    const { companyId, month, competenceMonth, periodType, assets: bodyAssets } = req.body;
+    const assets = Array.isArray(bodyAssets) && bodyAssets.length > 0 ? bodyAssets : getAssets(companyId as string);
+    const competence = (month as string) || (competenceMonth as string) || new Date().toISOString().slice(0, 7);
+    const pType = (periodType as DepreciationPeriodType) || 'mensal';
+    const summary = calculateDepreciationForPeriod(assets, competence, pType);
+    return res.json(summary);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // Export depreciation files (NG Mastermaq/Keevo, Domínio, Questor/Universal, Ficha)
 apiRouter.get('/assets/export', (req: Request, res: Response) => {
   try {
