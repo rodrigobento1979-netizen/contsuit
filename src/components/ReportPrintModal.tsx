@@ -27,10 +27,8 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
   title,
   subtitle,
   company,
-  summaryMetrics,
   columns,
   data,
-  userEmail = 'secsscont@gmail.com',
 }) => {
   if (!isOpen) return null;
 
@@ -60,6 +58,29 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
     URL.revokeObjectURL(url);
   };
 
+  // Calculate column totals for numeric fields ("Totalizar por página / Total Geral")
+  const columnTotals = React.useMemo(() => {
+    const totals: Record<string, number> = {};
+    if (!Array.isArray(data) || data.length === 0) return totals;
+    columns.forEach(col => {
+      const isNumericKey = /value|price|deprec|acumulada|residual|vcl|quota|amount|total|debit|credit|balance/i.test(col.key);
+      let sum = 0;
+      let countValid = 0;
+      data.forEach(row => {
+        const val = row[col.key];
+        const num = typeof val === 'number' ? val : parseFloat(String(val || '').replace(/[^\d.,-]/g, '').replace(/\./g, '').replace(',', '.'));
+        if (!isNaN(num) && (isNumericKey || typeof val === 'number')) {
+          sum += num;
+          countValid++;
+        }
+      });
+      if (countValid > 0) {
+        totals[col.key] = sum;
+      }
+    });
+    return totals;
+  }, [columns, data]);
+
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-0 sm:p-4 print:p-0 print:bg-white print:static">
       <div className="bg-white rounded-none sm:rounded-xl max-w-5xl w-full h-[100dvh] sm:h-auto sm:max-h-[92dvh] flex flex-col shadow-2xl border border-slate-300 overflow-hidden print:max-w-none print:max-h-none print:shadow-none print:border-none print:rounded-none">
@@ -72,7 +93,7 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
             </div>
             <div>
               <h3 className="font-bold text-slate-900 text-xs sm:text-sm">Relatório Contábil Oficial</h3>
-              <p className="text-[11px] text-slate-600">Formato pronto para impressão e exportação</p>
+              <p className="text-[11px] text-slate-600">Formato formal pronto para impressão e exportação</p>
             </div>
           </div>
 
@@ -129,23 +150,7 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
             </div>
           </div>
 
-          {/* Formal Summary Box (Instead of dashboard cards) */}
-          {summaryMetrics && summaryMetrics.length > 0 && (
-            <div className="border border-slate-300 rounded-lg p-3 bg-slate-50/80 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-              {summaryMetrics.map((metric, idx) => (
-                <div key={idx} className="space-y-0.5">
-                  <span className="text-[10px] font-bold uppercase text-slate-600 block">
-                    {metric.label}
-                  </span>
-                  <span className="text-sm font-black text-slate-900 block font-mono">
-                    {metric.value}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Main Professional Accounting Table */}
+          {/* Main Professional Accounting Table with Totals */}
           <div className="border border-slate-400 rounded-md overflow-hidden">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
@@ -189,6 +194,29 @@ export const ReportPrintModal: React.FC<ReportPrintModalProps> = ({
                   ))
                 )}
               </tbody>
+              {Object.keys(columnTotals).length > 0 && (
+                <tfoot>
+                  <tr className="bg-slate-100 font-black text-slate-900 border-t-2 border-slate-400 text-xs">
+                    {columns.map((col, idx) => {
+                      const totalVal = columnTotals[col.key];
+                      if (idx === 0) {
+                        return (
+                          <td key={idx} className="py-2.5 px-3 border-r border-slate-300 text-left uppercase">
+                            TOTAL GERAL / PÁGINA
+                          </td>
+                        );
+                      }
+                      return (
+                        <td key={idx} className={`py-2.5 px-3 border-r border-slate-300 last:border-r-0 ${col.align === 'right' ? 'text-right font-mono' : 'text-left'}`}>
+                          {totalVal !== undefined 
+                            ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(totalVal)
+                            : ''}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </div>
 
